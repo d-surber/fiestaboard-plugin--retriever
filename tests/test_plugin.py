@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from plugins._template import MyPlugin
+from plugins._template import RetrieverPlugin
 from src.plugins.manifest import PluginManifest
 
 MANIFEST_PATH = Path(__file__).parent.parent / "manifest.json"
@@ -34,11 +34,11 @@ class TestTemplatePlugin:
     """Core plugin functionality tests."""
 
     def test_plugin_id(self, manifest):
-        plugin = MyPlugin(manifest)
-        assert plugin.plugin_id == "my_plugin"
+        plugin = RetrieverPlugin(manifest)
+        assert plugin.plugin_id == "retriever"
 
     def test_fetch_data_missing_api_key(self, manifest):
-        plugin = MyPlugin(manifest)
+        plugin = RetrieverPlugin(manifest)
         plugin.config = {}
         result = plugin.fetch_data()
         assert result.available is False
@@ -46,7 +46,7 @@ class TestTemplatePlugin:
 
     def test_fetch_data_returns_formatted_lines_list(self, manifest):
         """The bug fix: formatted_lines must be a list, not a string."""
-        plugin = MyPlugin(manifest)
+        plugin = RetrieverPlugin(manifest)
         plugin.config = {"api_key": "test_key_123"}
         result = plugin.fetch_data()
         assert result.available is True
@@ -54,7 +54,7 @@ class TestTemplatePlugin:
         assert len(result.formatted_lines) == 6
 
     def test_fetch_data_returns_expected_data_keys(self, manifest):
-        plugin = MyPlugin(manifest)
+        plugin = RetrieverPlugin(manifest)
         plugin.config = {"api_key": "test_key_123"}
         result = plugin.fetch_data()
         assert result.available is True
@@ -64,12 +64,12 @@ class TestTemplatePlugin:
         assert "items" in result.data
 
     def test_validate_config_missing_api_key(self, manifest):
-        plugin = MyPlugin(manifest)
+        plugin = RetrieverPlugin(manifest)
         errors = plugin.validate_config({})
         assert len(errors) > 0
 
     def test_validate_config_valid(self, manifest):
-        plugin = MyPlugin(manifest)
+        plugin = RetrieverPlugin(manifest)
         errors = plugin.validate_config({"api_key": "test_key_123"})
         assert len(errors) == 0
 
@@ -106,7 +106,7 @@ class TestTemplateManifestMetadata:
 
     def test_manifest_parses_successfully(self, manifest):
         parsed = PluginManifest.from_dict(manifest)
-        assert parsed.id == "my_plugin"
+        assert parsed.id == "retriever"
         assert len(parsed.variables.simple) == 3
         assert "value" in parsed.variables.metadata
         assert parsed.variables.metadata["value"].type == "number"

@@ -1,6 +1,6 @@
-# My Plugin Name Setup Guide
+# Retriever Setup Guide
 
-The My Plugin Name plugin fetches data from [service] and displays it on your board.
+The Retriever plugin fetches data from [service] and displays it on your board.
 
 ## Overview
 
@@ -21,12 +21,12 @@ The My Plugin Name plugin fetches data from [service] and displays it on your bo
 In the FiestaBoard web UI:
 
 1. Go to **Integrations**
-2. Find **My Plugin Name** and toggle it **On**
+2. Find **Retriever** and toggle it **On**
 
 <!-- Add a screenshot to `docs/integrations.png`, then replace this comment with:
-     ![My Plugin Name in Integrations list](./integrations.png) -->
+     ![Retriever in Integrations list](./integrations.png) -->
 
-### 2. Configure My Plugin Name
+### 2. Configure Retriever
 
 1. Click the **Configure** button
 2. Enter your **API Key**
@@ -34,7 +34,7 @@ In the FiestaBoard web UI:
 4. Click **Save Changes**
 
 <!-- Add a screenshot to `docs/configuration.png`, then replace this comment with:
-     ![My Plugin Name configuration dialog](./configuration.png) -->
+     ![Retriever configuration dialog](./configuration.png) -->
 
 ### 3. Create a Board Template
 
@@ -46,8 +46,8 @@ Example template:
 
 ```jinja
 {center}MY PLUGIN
-{{my_plugin.value}}
-{{my_plugin.status}}
+{{retriever.value}}
+{{retriever.status}}
 ```
 
 ### 4. View on Your Board
@@ -55,20 +55,20 @@ Example template:
 Once configured, the plugin output displays on your board when the page is active:
 
 <!-- Add a screenshot to `docs/board-display.png`, then replace this comment with:
-     ![My Plugin Name on Vestaboard](./board-display.png) -->
+     ![Retriever on Vestaboard](./board-display.png) -->
 
 ## Template Variables
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{{my_plugin.value}}` | The primary data value | `123` |
-| `{{my_plugin.status}}` | Current status text | `OK` |
-| `{{my_plugin.formatted}}` | Pre-formatted display string | `Value: 123` |
-| `{{my_plugin.item_count}}` | Number of items returned | `2` |
-| `{{my_plugin.items.0.name}}` | Name of the first item | `Item 1` |
-| `{{my_plugin.items.0.value}}` | Value of the first item | `100` |
-| `{{my_plugin.items.0.status}}` | Status of the first item | `Active` |
-| `{{my_plugin.items.1.name}}` | Name of the second item | `Item 2` |
+| `{{retriever.value}}` | The primary data value | `123` |
+| `{{retriever.status}}` | Current status text | `OK` |
+| `{{retriever.formatted}}` | Pre-formatted display string | `Value: 123` |
+| `{{retriever.item_count}}` | Number of items returned | `2` |
+| `{{retriever.items.0.name}}` | Name of the first item | `Item 1` |
+| `{{retriever.items.0.value}}` | Value of the first item | `100` |
+| `{{retriever.items.0.status}}` | Status of the first item | `Active` |
+| `{{retriever.items.1.name}}` | Name of the second item | `Item 2` |
 
 > The plugin returns a list of items. Access each one by zero-based index
 > (`items.0`, `items.1`, …) and read the length from `item_count`.
@@ -86,7 +86,7 @@ Once configured, the plugin output displays on your board when the page is activ
 You can also configure the plugin via environment variables:
 
 ```bash
-MY_PLUGIN_API_KEY=your-api-key-here
+RETRIEVER_API_KEY=your-api-key-here
 ```
 
 ## Troubleshooting

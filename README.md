@@ -1,9 +1,9 @@
-# My Plugin Name Plugin
+# Retriever Plugin
 
 A brief description of what this plugin does.
 
 <!-- Add a screenshot to `docs/board-display.png`, then replace this comment with:
-     ![My Plugin Name Display](./docs/board-display.png) -->
+     ![Retriever Display](./docs/board-display.png) -->
 
 **→ [Setup Guide](./docs/SETUP.md)**
 
@@ -17,14 +17,14 @@ Describe in 2–3 sentences what the plugin does and why it is useful. Mention t
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{{my_plugin.value}}` | The primary data value | `123` |
-| `{{my_plugin.status}}` | Current status text | `OK` |
+| `{{retriever.value}}` | The primary data value | `123` |
+| `{{retriever.status}}` | Current status text | `OK` |
 
 ### Display
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{{my_plugin.formatted}}` | Pre-formatted display string | `Value: 123` |
+| `{{retriever.formatted}}` | Pre-formatted display string | `Value: 123` |
 
 ### Items (array)
 
@@ -33,11 +33,11 @@ index, and read the length from `item_count`.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `{{my_plugin.item_count}}` | Number of items returned | `2` |
-| `{{my_plugin.items.0.name}}` | Name of the first item | `Item 1` |
-| `{{my_plugin.items.0.value}}` | Value of the first item | `100` |
-| `{{my_plugin.items.0.status}}` | Status of the first item | `Active` |
-| `{{my_plugin.items.1.name}}` | Name of the second item | `Item 2` |
+| `{{retriever.item_count}}` | Number of items returned | `2` |
+| `{{retriever.items.0.name}}` | Name of the first item | `Item 1` |
+| `{{retriever.items.0.value}}` | Value of the first item | `100` |
+| `{{retriever.items.0.status}}` | Status of the first item | `Active` |
+| `{{retriever.items.1.name}}` | Name of the second item | `Item 2` |
 
 > Arrays are declared under `variables.arrays` in `manifest.json` and
 > accessed by index (`items.0`, `items.1`, …). The count is a separate
@@ -48,23 +48,23 @@ index, and read the length from `item_count`.
 ### Simple Display
 
 ```jinja
-{center}{{my_plugin.value}}
-{{my_plugin.status}}
+{center}{{retriever.value}}
+{{retriever.status}}
 ```
 
 ### Detailed Display
 
 ```jinja
 {center}MY PLUGIN
-{{my_plugin.formatted}}
+{{retriever.formatted}}
 ```
 
 ### Items List
 
 ```jinja
-{center}ITEMS: {{my_plugin.item_count}}
-{{my_plugin.items.0.name}}: {{my_plugin.items.0.value}}
-{{my_plugin.items.1.name}}: {{my_plugin.items.1.value}}
+{center}ITEMS: {{retriever.item_count}}
+{{retriever.items.0.name}}: {{retriever.items.0.value}}
+{{retriever.items.1.name}}: {{retriever.items.1.value}}
 ```
 
 ## Configuration
@@ -97,7 +97,7 @@ Your Name
 ### Plugin Structure
 
 ```text
-plugins/my_plugin/
+plugins/retriever/
 ├── __init__.py      # Plugin implementation (PluginBase subclass)
 ├── manifest.json    # Plugin metadata, settings, variables, screenshots
 ├── README.md        # Plugin documentation (this file)
@@ -178,10 +178,10 @@ The `screenshots` array makes plugin images discoverable by the docs site, API, 
 from src.plugins.base import PluginBase, PluginResult
 
 
-class MyPlugin(PluginBase):
+class RetrieverPlugin(PluginBase):
     @property
     def plugin_id(self) -> str:
-        return "my_plugin"
+        return "retriever"
 
     def fetch_data(self) -> PluginResult:
         return PluginResult(
@@ -208,7 +208,7 @@ and will block merges if coverage falls below the threshold.
 
 ```bash
 # Run tests for a single plugin (with coverage)
-python scripts/run_plugin_tests.py --plugin=my_plugin
+python scripts/run_plugin_tests.py --plugin=retriever
 
 # Run all plugin tests
 python scripts/run_plugin_tests.py
@@ -226,11 +226,11 @@ python scripts/run_plugin_tests.py
 #### Test File Template
 
 ```python
-"""Tests for the my_plugin plugin."""
+"""Tests for the retriever plugin."""
 
 import json, pytest
 from pathlib import Path
-from plugins.my_plugin import MyPlugin
+from plugins.retriever import RetrieverPlugin
 from src.plugins.base import PluginResult
 
 MANIFEST_PATH = Path(__file__).parent.parent / "manifest.json"
@@ -247,12 +247,12 @@ def manifest():
         return json.load(f)
 
 
-class TestMyPlugin:
+class TestRetrieverPlugin:
     def test_plugin_id(self, manifest):
-        assert MyPlugin(manifest).plugin_id == "my_plugin"
+        assert RetrieverPlugin(manifest).plugin_id == "retriever"
 
     def test_fetch_data_success(self, manifest):
-        plugin = MyPlugin(manifest)
+        plugin = RetrieverPlugin(manifest)
         plugin.config = {"api_key": "test_key_123"}
         result = plugin.fetch_data()
         assert result.available is True

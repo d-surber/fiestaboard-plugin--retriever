@@ -1,12 +1,12 @@
 {
-  "id": "my_plugin",
-  "name": "My Plugin Name",
+  "id": "retriever",
+  "name": "Retriever",
   "version": "1.0.0",
   "description": "A brief description of what this plugin does.",
   "author": "Your Name",
   "icon": "puzzle",
   "category": "utility",
-  "repository": "https://github.com/YourUsername/your-repo",
+  "repository": "https://github.com/d-surber/fiestaboard-plugin--retriever",
   "documentation": "README.md",
 
   "min_refresh_seconds": 60,
@@ -37,7 +37,7 @@
   },
   "env_vars": [
     {
-      "name": "MY_PLUGIN_API_KEY",
+      "name": "RETRIEVER_API_KEY",
       "required": false,
       "description": "API key (can also be set in UI)"
     }
@@ -94,9 +94,9 @@
     "device_type": "flagship",
     "template": [
       "",
-      "{{my_plugin.status}}",
-      "Value: {{my_plugin.value}}",
-      "{{my_plugin.formatted}}",
+      "{{retriever.status}}",
+      "Value: {{retriever.value}}",
+      "{{retriever.formatted}}",
       "",
       ""
     ],
@@ -139,7 +139,7 @@
   "screenshots": [
     {
       "src": "docs/board-display.png",
-      "alt": "My Plugin Name displayed on a Vestaboard",
+      "alt": "Retriever displayed on a Vestaboard",
       "caption": "Example board output using the default template",
       "primary": true
     }

@@ -19,7 +19,7 @@ from src.plugins.base import PluginBase, PluginResult
 logger = logging.getLogger(__name__)
 
 
-class MyPlugin(PluginBase):
+class RetrieverPlugin(PluginBase):
     """Template plugin implementation.
 
     This class demonstrates how to create a FiestaBoard plugin.
@@ -29,7 +29,7 @@ class MyPlugin(PluginBase):
     @property
     def plugin_id(self) -> str:
         """Return the plugin ID matching manifest.json."""
-        return "my_plugin"
+        return "retriever"
 
     def fetch_data(self) -> PluginResult:
         """
@@ -50,7 +50,7 @@ class MyPlugin(PluginBase):
 
         # Can also check environment variable
         if not api_key:
-            api_key = os.getenv("MY_PLUGIN_API_KEY")
+            api_key = os.getenv("RETRIEVER_API_KEY")
 
         if not api_key:
             return PluginResult(available=False, error="API key not configured")
@@ -155,10 +155,10 @@ class MyPlugin(PluginBase):
     #     return [
     #         TriggerResult(
     #             triggered=True,
-    #             trigger_id=f"my_plugin_event_{event.id}",  # stable per event
+    #             trigger_id=f"retriever_event_{event.id}",  # stable per event
     #             priority=50,                                # higher = more important
     #             duration_seconds=30,                        # auto-expires after this
-    #             data={"label": event.label},                # → {{my_plugin.label}}
+    #             data={"label": event.label},                # → {{retriever.label}}
     #             message="Event fired",                      # fallback when no
     #                                                         # trigger_page_id is set
     #         )
