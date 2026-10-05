@@ -5,15 +5,10 @@ import Testing
 
 private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 
-private struct FixedSource: Source {
-    let name: String
-    let schema: JSON
-    func fetch(_ done: @escaping (Entry) -> Void) { done(failed("unused")) }
-}
-
 @Test func configListsEverySourceWithItsSchema() {
     let config = Config(sources: allSources)
-    #expect(Set(config.schemas.keys) == ["reminders", "music"])
+    #expect(Set(config.schemas.keys) == Set(allSources.map(\.name)))
+    #expect(config.schemas.count == allSources.count)
     for source in allSources {
         #expect(config.schemas[source.name] == source.schema)
     }
@@ -35,8 +30,8 @@ private struct FixedSource: Source {
 }
 
 @Test func addingASourceChangesTheSequenceNumber() {
-    let reminders = RemindersSource()
-    #expect(Config(sources: [reminders]).seq != Config(sources: [reminders, MusicSource()]).seq)
+    let first = vectorSources[0], second = vectorSources[1]
+    #expect(Config(sources: [first]).seq != Config(sources: [first, second]).seq)
 }
 
 @Test func aRequestForOneEndpointIsRefusedByTheOther() throws {

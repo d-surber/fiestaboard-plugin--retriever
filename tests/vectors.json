@@ -1,5 +1,5 @@
 {
-  "_comment": "Messages sealed by each side for the other to open. The key is a test key: bytes 0 to 31. Read by tests/test_plugin.py and by RetrieverServer's tests.",
+  "_comment": "Messages sealed by each side for the other to open. The key is a test key: bytes 0 to 31. The server's responses come from stand-in sources defined in its tests (numbers, words), not from its real ones, so adding or changing a source does not invalidate this file. Read by tests/test_plugin.py and by RetrieverServer's tests.",
   "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
   "requests_from_plugin": {
     "/retrieve": {
@@ -16,90 +16,39 @@
   "responses_from_server": {
     "/retrieve": {
       "id": "00112233445566778899aabbccddeeff",
-      "seq": 603386333,
-      "body": "547beed0221a24cab9ba7e45b97f84a091c86d056d5c51dcdfd1b4004e2ac75ee698b0cd7138b6e54db876298feb4570b4e9a5f6b8bba1e027f94034412ae8684e70060ec76d966ce44d392608b230fa0b0cafdbc01d0060be2e31a9b24e5439e6fb765711f6a0cd429af2e79b997572ce5ecfff4a456f8a9a111594f9632f23744522c330ecfe7f65670d19c75de4010d1caa5d7a0f6272fa3378c85c310613fda31e73889adb5ff1e9ecf97899129d3bce39b216dce668cc0ebfca3c318f9f0b7b9558123cd20b77015a90c5db53ea294dce1cdc202b22987cf2944a129c52786adf795d4ef7b80c5f8543f2313a859d18197abb8f66937a35cdeb5696117ba06fdcfd76ad49ddf9a8994b691923ece45b7908349e740e11b3fa45895a21ec63d8eb853370bdeb468fae95116010f72c0f84399604e21f3d19aaedb416089e8f194cc8ec8048b582dccf59dc512341ee1e85",
+      "seq": 1379786758,
+      "body": "141167c2dfbce075540abcd0e396fe5af9b9199ac597168c2dcad027509d0e2e1ce83b72a185ba83ed368cae9d5a5c830226d41290990c1271f7afa08077ede04349e908aae5963c95dfce5256df1ac8cea4e13a7c9ef7061992ef531b88bea4d047a09f78c433c3b0ef17caa1d6e23111ed458c17f48957fd7db9d14ad444c8c92909bdd4d067ad787063e0f61129648dea5bdb154a2951a0eba8974c98a9594806147aa4c3a6827f12c07444a2ad5bf86f126225179e1abe1bb448c8b1151d2dd935a24d35a43fc9cee4",
       "data": {
-        "reminders": {
-          "error": "",
+        "numbers": {
           "data": {
             "items": [
-              {
-                "priority": 0,
-                "due": "2027-01-15T08:15:00Z",
-                "list": "Reminders",
-                "title": "test0"
-              }
+              1,
+              2
             ],
-            "count": 1
-          }
+            "count": 2
+          },
+          "error": ""
         },
-        "music": {
-          "error": "",
+        "words": {
           "data": {
-            "album": "Kind of Blue",
-            "state": "playing",
-            "artist": "Miles Davis",
-            "title": "So What"
-          }
+            "text": "naïve café"
+          },
+          "error": ""
         }
       }
     },
     "/config": {
       "id": "00112233445566778899aabbccddeeff",
-      "seq": 603386333,
-      "body": "1ac5246145d600454fab45f51fffa412714f0e4e5d0374eb6fb0aca2e137cc5097a4297ad23ea594eb770a3927502db03e4abadf44be29e3042d4608c90dbef20f599fba91f9fac7002039f16e72b8c27b9183699d7c4f79e8dfa2c1d364eba590eb9257de661ca95d59c268ca4358af0fc9678d0610f78d03fca5f45343c3149a8443a9705287dd5cd73feff34c3ec37bdc92a3505a5578ddd4162f46bd72f06f1dd8901ecf3df67d4e38ddc64381157ef1e5ed2d69482c717be5f77480234b06325e4524603ee584b9fca3664da545c2f0ef3d13b258d7d2411b08688c1496b98e85d59fbc479b469ddb391ea8700544576d97895ac1cc276c820b78c1e663530445c4b570c363d35647b5d3d1fe7a9ebb0bb29077572c4814d5aa67dac118af855b1ff61576f02dc7ed9c23f639d046cb04050848da870335770828513dc86d3096be61eb96c5ca39c3372ac8da275c0a139de922e82fdfa82a04a17027540fe5130c57257ff9de65203973715aeea6f1925c684132af53bf7a312edafc032118ce9d4ef8737179aff50a8c6482b92b9380b79cff41ed5cff8bf8a5f0422f9c4ef2d88d7910b1045c040f3a34430303a615f9a227721f56001702fa89ed3e3343dd2a6080ba162e7c1c52a3069a1f85d68451963de35c1d35361d31cf9c1341a979d082ea47f46bea07df2421794d2a4aa736c44fc5257ad1c8c5ce830d5f0026e8e8bc8a117f2aec5680c862fed6e4029e7ba88b005ec1a8609bfd5e46a1ca245be1af6cca5f488940c331e1f32e3b3637a21f7eae32a56279da7363f1a3966b13f397889be346e029b891841cd6a3e1aad570e2471ee5207913462b6c97150474d78124b6fd56fffc7ec2582f9e90cc00b62a0e3dfd8cc5a7889b7894",
+      "seq": 1379786758,
+      "body": "e19ab5b0963bee36b7da0ff2d7e0fd3c57203bb991e1b4d634c881c5cdd06dec5445a89ff7670574b4e01d2d1f9475c07ac7ffbbfef0af17494704da0795511634c7acee248ee2683e5ed5ac4c5819a3da1c596e7e3c43026910f917846aca3507ee5ae14bfccf030840eb9497f76fb5e385e1a0b528fa6b6eda6fdebe101ebbe092eb166bab8367ab44c45eb2e9178a62aa0c41bb175ff5e5c91ed6b894079f3427de5eed5d61a7ab1eb66ef840d74bdf486007f5de46ff61304f8a4f73244974f7c03bb449b721dddfdbd6de422235aa0ee143731fdd11ea7aabf5ba0c9e90dd93a54132991e21be43619fbf7b775cebbbf26f15d5c8fb05b56fa7ae135a837a60249b3142f0b69c1db874dbaa762d8554251bfed34b3ba243bc985d94b9df8dfe3af1447993b8c04ae3afbb385dd6f4ea5b18106c4684428a44f43c84027ad95b7f7242c79168e4fb1623e13269a22da1",
       "data": {
-        "music": {
-          "type": "object",
-          "default": {
-            "artist": "",
-            "title": "",
-            "state": "stopped",
-            "album": ""
-          },
-          "properties": {
-            "title": {
-              "type": "string"
-            },
-            "artist": {
-              "type": "string"
-            },
-            "state": {
-              "type": "string",
-              "enum": [
-                "playing",
-                "paused",
-                "stopped"
-              ]
-            },
-            "album": {
-              "type": "string"
-            }
-          }
-        },
-        "reminders": {
-          "type": "object",
+        "numbers": {
           "properties": {
             "items": {
+              "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "priority": {
-                    "type": "integer"
-                  },
-                  "title": {
-                    "type": "string"
-                  },
-                  "due": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "list": {
-                    "type": "string"
-                  }
-                }
-              },
-              "type": "array"
+                "type": "integer"
+              }
             },
             "count": {
               "type": "integer"
@@ -108,7 +57,19 @@
           "default": {
             "items": [],
             "count": 0
-          }
+          },
+          "type": "object"
+        },
+        "words": {
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "default": {
+            "text": ""
+          },
+          "type": "object"
         }
       }
     }

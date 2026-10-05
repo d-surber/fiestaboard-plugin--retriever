@@ -144,16 +144,17 @@ private func bytes(hex: String) -> Data {
     let (vector, decoded) = try Vectors.load().opened(Wire.retrievePath, as: [String: Entry].self)
     #expect(decoded.id == vector.id)
     #expect(decoded.seq == vector.seq)
-    #expect(Set(decoded.data.keys) == Set(allSources.map(\.name)))
-    #expect(decoded.data.values.allSatisfy { $0.error == "" })
+    #expect(decoded.seq == Config(sources: vectorSources).seq)
+    #expect(decoded.data == vectorEntries)
 }
 
-/// Fails when the config has changed since the vectors were generated: regenerate them.
-@Test func configResponseVectorIsTheCurrentConfig() throws {
+/// The vectors come from `vectorSources`, not the server's own sources, so
+/// this fails only when the wire format or those stand-ins change.
+@Test func configResponseVectorIsTheStandInConfig() throws {
     let (vector, decoded) = try Vectors.load().opened(Wire.configPath, as: [String: JSON].self)
     #expect(decoded.id == vector.id)
     #expect(decoded.seq == vector.seq)
-    let config = Config(sources: allSources)
+    let config = Config(sources: vectorSources)
     #expect(decoded.seq == config.seq)
     #expect(decoded.data == config.schemas)
 }

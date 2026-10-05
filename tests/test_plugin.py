@@ -422,10 +422,13 @@ class TestInterop:
         assert (seq, data) == (vector["seq"], vector["data"])
 
     def test_the_servers_config_gives_every_source_a_default(self):
+        """Whatever sources the vectors hold: the plugin's defaults come from the config alone."""
         sources = VECTORS["responses_from_server"][CONFIG]["data"]
-        assert set(sources) == set(VECTORS["responses_from_server"][RETRIEVE]["data"])
-        assert retriever.default_for(sources["reminders"]) == NO_REMINDERS["data"]
-        assert retriever.default_for(sources["music"]) == {"state": "stopped", "title": "", "artist": "", "album": ""}
+        values = VECTORS["responses_from_server"][RETRIEVE]["data"]
+        assert set(sources) == set(values)
+        for name, schema in sources.items():
+            assert retriever.default_for(schema) == schema["default"]
+            assert set(values[name]) == {"error", "data"}
 
     @pytest.mark.parametrize("path", [RETRIEVE, CONFIG])
     def test_request_vector_is_what_the_plugin_seals(self, path):
