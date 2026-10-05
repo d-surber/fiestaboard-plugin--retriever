@@ -19,10 +19,10 @@
         "title": "Server URL",
         "description": "Base URL of the Retriever server, e.g. http://192.0.2.10:42511. Use an IP address if the name does not resolve."
       },
-      "token": {
+      "key": {
         "type": "string",
-        "title": "Token",
-        "description": "Shared token configured on the server.",
+        "title": "Key",
+        "description": "The key the server was installed with: base64 of 32 bytes.",
         "ui:widget": "password"
       },
       "refresh_seconds": {
@@ -38,17 +38,17 @@
         "default": false
       }
     },
-    "required": ["server_url", "token"]
+    "required": ["server_url", "key"]
   },
 
   "demo": {
     "flagship": {
       "name": "Retriever Demo",
       "template": [
-        "Reminders: {{retriever.reminders.count}}",
-        "{{retriever.error}}",
+        "Reminders: {{retriever.reminders.data.count}}",
+        "{{retriever.error}}{{retriever.reminders.error}}",
         "",
-        "{{retriever.reminders.text}}",
+        "{{retriever.reminders.data.text}}",
         "",
         ""
       ],
@@ -64,9 +64,9 @@
     "note": {
       "name": "Retriever (Note)",
       "template": [
-        "REMINDERS: {{retriever.reminders.count}}",
-        "{{retriever.error}}",
-        "{{retriever.reminders.text}}"
+        "REMINDERS: {{retriever.reminders.data.count}}",
+        "{{retriever.error}}{{retriever.reminders.error}}",
+        "{{retriever.reminders.data.text}}"
       ],
       "line_metadata": [
         {"alignment": "left", "wrap": false},
