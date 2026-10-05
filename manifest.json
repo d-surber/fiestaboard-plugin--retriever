@@ -42,24 +42,38 @@
   },
 
   "demo": {
-    "name": "My Plugin Demo",
-    "device_type": "flagship",
-    "template": [
-      "",
-      "Reminders: {{retriever.reminders.count}}",
-      "{{retriever.reminders.items.0.title}}",
-      "{{retriever.reminders.items.1.title}}",
-      "",
-      "{{retriever.error}}"
-    ],
-    "line_metadata": [
-      {"alignment": "center", "wrap": false},
-      {"alignment": "center", "wrap": false},
-      {"alignment": "center", "wrap": false},
-      {"alignment": "center", "wrap": false},
-      {"alignment": "center", "wrap": false},
-      {"alignment": "center", "wrap": false}
-    ]
+    "flagship": {
+      "name": "Retriever Demo",
+      "template": [
+        "Reminders: {{retriever.reminders.count}}",
+        "{{retriever.error}}",
+        "",
+        "{{retriever.reminders.text}}",
+        "",
+        ""
+      ],
+      "line_metadata": [
+        {"alignment": "center", "wrap": false},
+        {"alignment": "center", "wrap": false},
+        {"alignment": "center", "wrap": false},
+        {"alignment": "left", "wrap": false},
+        {"alignment": "left", "wrap": false},
+        {"alignment": "left", "wrap": false}
+      ]
+    },
+    "note": {
+      "name": "Retriever (Note)",
+      "template": [
+        "REMINDERS: {{retriever.reminders.count}}",
+        "{{retriever.error}}",
+        "{{retriever.reminders.text}}"
+      ],
+      "line_metadata": [
+        {"alignment": "left", "wrap": false},
+        {"alignment": "left", "wrap": false},
+        {"alignment": "left", "wrap": false}
+      ]
+    }
   },
 
   "_teaser_comment": "One line of literal board text, max 15 tiles (the Note width, so it fits every board). Shown as a split-flap strip on your plugin's directory card. Colour markers like {66} count as ONE tile, not four characters.",

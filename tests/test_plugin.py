@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from src.plugins.manifest import PluginManifest
+from src.plugins.manifest import PluginManifest, validate_manifest
 
 PLUGIN_DIR = Path(__file__).parent.parent
 MANIFEST_PATH = PLUGIN_DIR / "manifest.json"
@@ -191,6 +191,16 @@ class TestManifest:
         server.status = 401
         with pytest.raises(Exception, match="401"):
             plugin._fetch(server.url + "/reminders", TOKEN)
+
+    def test_manifest_is_valid(self, manifest):
+        valid, errors = validate_manifest(manifest)
+        assert valid, errors
+
+    @pytest.mark.parametrize(("device_type", "rows"), [("flagship", 6), ("note", 3)])
+    def test_demo_page_per_board(self, manifest, device_type, rows):
+        demo = PluginManifest.from_dict(manifest).demo[device_type]
+        assert len(demo.template) == rows
+        assert len(demo.line_metadata) == rows
 
     def test_fetch_fits_inside_fiestaboard_render_timeout(self):
         assert retriever.TIMEOUT_SECONDS < 5
