@@ -6,6 +6,8 @@
     <string>local.retriever-server</string>
     <key>CFBundleName</key>
     <string>RetrieverServer</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Reports what Music is playing to FiestaBoard.</string>
     <key>NSRemindersFullAccessUsageDescription</key>
     <string>Serves incomplete reminders to FiestaBoard.</string>
     <key>NSRemindersUsageDescription</key>

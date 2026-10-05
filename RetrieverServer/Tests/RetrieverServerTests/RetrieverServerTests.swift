@@ -141,11 +141,11 @@ private func bytes(hex: String) -> Data {
 }
 
 @Test func retrieveResponseVectorIsWhatTheServerSeals() throws {
-    let (vector, decoded) = try Vectors.load().opened(Wire.retrievePath, as: Values.self)
+    let (vector, decoded) = try Vectors.load().opened(Wire.retrievePath, as: [String: Entry].self)
     #expect(decoded.id == vector.id)
     #expect(decoded.seq == vector.seq)
-    #expect(decoded.data.reminders.error == "")
-    #expect(decoded.data.reminders.data.count == 1)
+    #expect(Set(decoded.data.keys) == Set(allSources.map(\.name)))
+    #expect(decoded.data.values.allSatisfy { $0.error == "" })
 }
 
 /// Fails when the config has changed since the vectors were generated: regenerate them.
@@ -153,8 +153,9 @@ private func bytes(hex: String) -> Data {
     let (vector, decoded) = try Vectors.load().opened(Wire.configPath, as: [String: JSON].self)
     #expect(decoded.id == vector.id)
     #expect(decoded.seq == vector.seq)
-    #expect(decoded.seq == Config.seq)
-    #expect(decoded.data == Config.sources)
+    let config = Config(sources: allSources)
+    #expect(decoded.seq == config.seq)
+    #expect(decoded.data == config.schemas)
 }
 
 /// Just enough JSON to compare a decoded response in the tests above.

@@ -40,8 +40,8 @@ SEQ = 7
 SOURCES = {
     "reminders": {
         "type": "object",
-        "properties": {"count": {"type": "integer"}, "text": {"type": "string"}, "items": {"type": "array"}},
-        "default": {"count": 0, "text": "", "items": []},
+        "properties": {"count": {"type": "integer"}, "items": {"type": "array"}},
+        "default": {"count": 0, "items": []},
     }
 }
 VALUES = {
@@ -49,12 +49,11 @@ VALUES = {
         "error": "",
         "data": {
             "count": 1,
-            "text": "TEST0",
             "items": [{"title": "test0", "list": "Reminders", "due": "2026-10-05T06:15:00Z", "priority": 0}],
         },
     }
 }
-NO_REMINDERS = {"error": "", "data": {"count": 0, "text": "", "items": []}}
+NO_REMINDERS = {"error": "", "data": {"count": 0, "items": []}}
 
 
 def seal(key, plaintext, context):
@@ -422,9 +421,11 @@ class TestInterop:
         seq, data = retriever.open_response(self.key, bytes.fromhex(vector["body"]), vector["id"], path)
         assert (seq, data) == (vector["seq"], vector["data"])
 
-    def test_the_servers_config_gives_reminders_a_default(self):
+    def test_the_servers_config_gives_every_source_a_default(self):
         sources = VECTORS["responses_from_server"][CONFIG]["data"]
+        assert set(sources) == set(VECTORS["responses_from_server"][RETRIEVE]["data"])
         assert retriever.default_for(sources["reminders"]) == NO_REMINDERS["data"]
+        assert retriever.default_for(sources["music"]) == {"state": "stopped", "title": "", "artist": "", "album": ""}
 
     @pytest.mark.parametrize("path", [RETRIEVE, CONFIG])
     def test_request_vector_is_what_the_plugin_seals(self, path):

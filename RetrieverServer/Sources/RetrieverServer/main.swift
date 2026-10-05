@@ -1,68 +1,16 @@
 import CryptoKit
-import EventKit
 import Foundation
 import Network
 
 setvbuf(stdout, nil, _IOLBF, 0)   // flush log lines immediately under launchd
 
 let port: NWEndpoint.Port = 42511
-let WIDTH = 15   // board columns (Vestaboard Note)
-let ROWS = 3     // board rows (Vestaboard Note)
 let key = Wire.key(base64: ProcessInfo.processInfo.environment["RETRIEVER_KEY"] ?? "")
-let store = EKEventStore()
+
+let sources = allSources
+let config = Config(sources: sources)
+let sourceTimeout: TimeInterval = 3   // the plugin gives a whole fetch 4 s
 var activeListener: NWListener?
-
-struct Item: Codable {
-    let title: String
-    let list: String
-    let due: Date?
-    let priority: Int
-}
-
-// Top-level object rather than a bare array: many JSON-path consumers expect one.
-struct Payload: Codable {
-    let count: Int
-    let text: String      // board-ready: uppercased titles, one per line, WIDTH chars max, ROWS lines max
-    let items: [Item]
-}
-
-// One served value. `error` reports a problem getting this value in
-// particular and is empty when there was none.
-struct Entry<Value: Codable>: Codable {
-    let error: String
-    let data: Value
-}
-
-// Everything the server serves, keyed by name.
-struct Values: Codable {
-    let reminders: Entry<Payload>
-}
-
-func log(_ s: String) { print("\(ISO8601DateFormatter().string(from: Date())) \(s)") }
-
-// Calls `done` with nil if Reminders could not be read.
-func fetchReminders(_ done: @escaping ([Item]?) -> Void) {
-    let cal = Calendar.current
-    store.refreshSourcesIfNecessary()
-    // Fetch all incomplete reminders and filter locally: EventKit's date-range
-    // predicate can miss date-only ("all-day") reminders. A repeating reminder
-    // is one EKReminder whose due date is its next incomplete occurrence.
-    let pred = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
-    store.fetchReminders(matching: pred) { reminders in
-        guard let all = reminders else {
-            log("Reminders could not be read")
-            return done(nil)
-        }
-        let items = all.compactMap { r -> Item? in
-            guard let comps = r.dueDateComponents,
-                  let due = cal.date(from: comps),
-                  cal.isDateInToday(due) else { return nil }
-            return Item(title: r.title ?? "", list: r.calendar.title, due: due, priority: r.priority)
-        }
-        log("Fetched \(all.count) incomplete, \(items.count) due today")
-        done(items.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) })
-    }
-}
 
 func respond(_ conn: NWConnection, _ status: String, _ body: Data = Data()) {
     let head = "HTTP/1.1 \(status)\r\nContent-Type: application/octet-stream\r\n" +
@@ -111,22 +59,13 @@ func handle(_ conn: NWConnection) {
             return respond(conn, "401 Unauthorized")
         }
         func send<Body: Codable>(_ data: Body) {
-            guard let body = try? Wire.seal(response: data, id: id, seq: Config.seq, path: path, key: key) else {
+            guard let body = try? Wire.seal(response: data, id: id, seq: config.seq, path: path, key: key) else {
                 return respond(conn, "500 Internal Server Error")
             }
             respond(conn, "200 OK", body)
         }
-        if path == Wire.configPath { return send(Config.sources) }
-        fetchReminders { fetched in
-            let items = fetched ?? []
-            let text = items.prefix(ROWS)
-                .map { String($0.title.uppercased().prefix(WIDTH)) }
-                .joined(separator: "\n")
-            let values = Values(reminders: Entry(
-                error: fetched == nil ? "Reminders could not be read" : "",
-                data: Payload(count: items.count, text: text, items: items)))
-            DispatchQueue.main.async { send(values) }
-        }
+        if path == Wire.configPath { return send(config.schemas) }
+        retrieve(from: sources, timeout: sourceTimeout) { send($0) }
     }
 }
 
@@ -134,7 +73,7 @@ func startListener() {
     do {
         let listener = try NWListener(using: .tcp, on: port)
         // Registers with mDNSResponder so the HomePod sleep proxy can wake the Mac
-        listener.service = NWListener.Service(name: "Reminders", type: "_http._tcp")
+        listener.service = NWListener.Service(name: "Retriever", type: "_http._tcp")
         listener.stateUpdateHandler = { log("Listener: \($0)") }
         listener.newConnectionHandler = handle
         listener.start(queue: .main)
@@ -150,12 +89,6 @@ guard key != nil else {
     exit(1)
 }
 
-store.requestFullAccessToReminders { granted, error in
-    guard granted else {
-        log("Reminders access denied: \(error?.localizedDescription ?? "no error given")")
-        exit(1)
-    }
-    DispatchQueue.main.async { startListener() }
-}
-
+log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(config.seq)")
+startListener()
 dispatchMain()

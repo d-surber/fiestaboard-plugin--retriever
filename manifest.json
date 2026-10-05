@@ -48,8 +48,8 @@
         "Reminders: {{retriever.reminders.data.count}}",
         "{{retriever.error}}{{retriever.reminders.error}}",
         "",
-        "{{retriever.reminders.data.text}}",
-        "",
+        "{{= IFERROR(retriever.reminders.data.items.0.title, \"\") }}",
+        "{{= IFERROR(retriever.reminders.data.items.1.title, \"\") }}",
         ""
       ],
       "line_metadata": [
@@ -66,7 +66,7 @@
       "template": [
         "REMINDERS: {{retriever.reminders.data.count}}",
         "{{retriever.error}}{{retriever.reminders.error}}",
-        "{{retriever.reminders.data.text}}"
+        "{{= IFERROR(retriever.reminders.data.items.0.title, \"\") }}"
       ],
       "line_metadata": [
         {"alignment": "left", "wrap": false},
@@ -85,8 +85,8 @@
         "     Reminders: 2",
         "",
         "",
-        "WATER PLANTS",
-        "CALL DENTIST",
+        "Water plants",
+        "Call dentist",
         ""
       ]
     },
@@ -95,7 +95,7 @@
       "rows": [
         "REMINDERS: 2",
         "",
-        "WATER PLANTS"
+        "Water plants"
       ]
     }
   ]

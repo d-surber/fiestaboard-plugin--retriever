@@ -5,43 +5,26 @@ import Testing
 
 private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 
-@Test func configListsRemindersWithItsSchema() {
-    #expect(Array(Config.sources.keys) == ["reminders"])
-    #expect(Config.sources["reminders"] == remindersSchema)
+private struct FixedSource: Source {
+    let name: String
+    let schema: JSON
+    func fetch(_ done: @escaping (Entry) -> Void) { done(failed("unused")) }
 }
 
-@Test func theSchemaDefaultIsAnEmptyPayload() throws {
-    guard case .object(let schema) = remindersSchema, let value = schema["default"] else {
-        Issue.record("the reminders schema has no default")
-        return
+@Test func configListsEverySourceWithItsSchema() {
+    let config = Config(sources: allSources)
+    #expect(Set(config.schemas.keys) == ["reminders", "music"])
+    for source in allSources {
+        #expect(config.schemas[source.name] == source.schema)
     }
-    let payload = try JSONDecoder().decode(Payload.self, from: JSONEncoder().encode(value))
-    #expect(payload.count == 0)
-    #expect(payload.text == "")
-    #expect(payload.items.isEmpty)
+    #expect(config.seq == Config.sequenceNumber(of: config.schemas))
 }
 
-@Test func theSchemaNamesEveryFieldOfThePayload() throws {
-    let item = Item(title: "t", list: "l", due: Date(), priority: 0)
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    let encoded = try JSONDecoder().decode(JSON.self, from: encoder.encode(Payload(count: 1, text: "T", items: [item])))
-    guard case .object(let payload) = encoded, case .array(let items)? = payload["items"], case .object(let first)? = items.first,
-          case .object(let schema) = remindersSchema, case .object(let properties)? = schema["properties"],
-          case .object(let itemsSchema)? = properties["items"], case .object(let itemSchema)? = itemsSchema["items"],
-          case .object(let itemProperties)? = itemSchema["properties"]
-    else {
-        Issue.record("payload or schema is not shaped as expected")
-        return
-    }
-    #expect(Set(payload.keys) == Set(properties.keys))
-    #expect(Set(first.keys) == Set(itemProperties.keys))
-}
-
-@Test func sequenceNumberIgnoresKeyOrder() {
-    let one: [String: JSON] = ["a": ["type": "object", "default": ["x": 1, "y": "z"]], "b": ["type": "string"]]
-    let other: [String: JSON] = ["b": ["type": "string"], "a": ["default": ["y": "z", "x": 1], "type": "object"]]
-    #expect(Config.sequenceNumber(of: one) == Config.sequenceNumber(of: other))
+@Test func sequenceNumberIgnoresKeyOrderAndSourceOrder() {
+    let a = FixedSource(name: "a", schema: ["type": "object", "default": ["x": 1, "y": "z"]])
+    let sameA = FixedSource(name: "a", schema: ["default": ["y": "z", "x": 1], "type": "object"])
+    let b = FixedSource(name: "b", schema: ["type": "string"])
+    #expect(Config(sources: [a, b]).seq == Config(sources: [b, sameA]).seq)
 }
 
 @Test func sequenceNumberChangesWithTheContent() {
@@ -49,7 +32,11 @@ private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
     #expect(Config.sequenceNumber(of: base) != Config.sequenceNumber(of: ["a": ["type": "object", "default": ["x": 2]]]))
     #expect(Config.sequenceNumber(of: base) != Config.sequenceNumber(of: ["a": ["type": "array", "default": ["x": 1]]]))
     #expect(Config.sequenceNumber(of: base) != Config.sequenceNumber(of: ["b": ["type": "object", "default": ["x": 1]]]))
-    #expect(Config.seq == Config.sequenceNumber(of: Config.sources))
+}
+
+@Test func addingASourceChangesTheSequenceNumber() {
+    let reminders = RemindersSource()
+    #expect(Config(sources: [reminders]).seq != Config(sources: [reminders, MusicSource()]).seq)
 }
 
 @Test func aRequestForOneEndpointIsRefusedByTheOther() throws {
@@ -61,14 +48,15 @@ private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 }
 
 @Test func aConfigResponseCarriesTheSequenceNumberAndIsBoundToItsPath() throws {
-    let body = try Wire.seal(response: Config.sources, id: "abc123", seq: Config.seq, path: Wire.configPath, key: key)
+    let config = Config(sources: allSources)
+    let body = try Wire.seal(response: config.schemas, id: "abc123", seq: config.seq, path: Wire.configPath, key: key)
     let box = try ChaChaPoly.SealedBox(combined: body)
     #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: key, authenticating: Wire.responseContext(Wire.retrievePath)) }
     let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseContext(Wire.configPath))
     let decoded = try JSONDecoder().decode(Wire.Response<[String: JSON]>.self, from: plain)
     #expect(decoded.id == "abc123")
-    #expect(decoded.seq == Config.seq)
-    #expect(decoded.data == Config.sources)
+    #expect(decoded.seq == config.seq)
+    #expect(decoded.data == config.schemas)
 }
 
 @Test func jsonValuesSurviveARoundTrip() throws {
