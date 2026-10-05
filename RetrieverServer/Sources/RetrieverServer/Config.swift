@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import RetrieverSourceKit
 
 // What the server tells the plugin about itself, so that the plugin need not
 // have it built in: the sources, and for each the shape of its data as a

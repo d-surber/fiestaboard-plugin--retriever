@@ -1,4 +1,5 @@
 import Foundation
+import RetrieverSourceKit
 
 /// The version of macOS this Mac is running.
 final class OSSource: Source {

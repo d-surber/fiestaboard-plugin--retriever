@@ -5,8 +5,12 @@ let package = Package(
     name: "RetrieverServer",
     platforms: [.macOS(.v14)],
     targets: [
+        // What the server and every source module share: the Source
+        // interface, and the XPC plumbing with its signature checks.
+        .target(name: "RetrieverSourceKit"),
         .executableTarget(
             name: "RetrieverServer",
+            dependencies: ["RetrieverSourceKit"],
             linkerSettings: [
                 // Embed Info.plist so macOS accepts the Reminders permission request
                 .unsafeFlags([
@@ -17,6 +21,10 @@ let package = Package(
                 ])
             ]
         ),
-        .testTarget(name: "RetrieverServerTests", dependencies: ["RetrieverServer"]),
+        // Source modules: one separately signed program per source.
+        .executableTarget(name: "RetrieverSourceOS", dependencies: ["RetrieverSourceKit"]),
+        .testTarget(
+            name: "RetrieverServerTests",
+            dependencies: ["RetrieverServer", "RetrieverSourceKit", "RetrieverSourceOS"]),
     ]
 )

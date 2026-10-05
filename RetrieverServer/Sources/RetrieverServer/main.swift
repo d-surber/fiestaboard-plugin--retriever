@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import RetrieverSourceKit
 import Network
 
 setvbuf(stdout, nil, _IOLBF, 0)   // flush log lines immediately under launchd
@@ -7,7 +8,29 @@ setvbuf(stdout, nil, _IOLBF, 0)   // flush log lines immediately under launchd
 let port: NWEndpoint.Port = 42511
 let key = Wire.key(base64: ProcessInfo.processInfo.environment["RETRIEVER_KEY"] ?? "")
 
-let sources = allSources
+
+// `RetrieverServer status` reports on the modules and exits, serving nothing.
+if CommandLine.arguments.dropFirst().first == "status" {
+    for service in moduleServices {
+        do {
+            let module = try RemoteSource(service: service)
+            let answered = DispatchSemaphore(value: 0)
+            module.fetch { entry in
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                let data = (try? encoder.encode(entry.data)).map { String(decoding: $0, as: UTF8.self) } ?? "?"
+                print("\(service): ok; source \"\(module.name)\"; error \"\(entry.error)\"; data \(data)")
+                answered.signal()
+            }
+            answered.wait()
+        } catch {
+            print("\(service): \(error)")
+        }
+    }
+    exit(0)
+}
+
+let sources = allSources + connectModules()
 let config = Config(sources: sources)
 let sourceTimeout: TimeInterval = 3   // the plugin gives a whole fetch 4 s
 var activeListener: NWListener?

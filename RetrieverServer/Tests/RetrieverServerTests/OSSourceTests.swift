@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import RetrieverServer
+@testable import RetrieverSourceOS
+@testable import RetrieverSourceKit
 
 @Test func osReportsTheRunningVersionOfMacOS() async throws {
     let source = OSSource()

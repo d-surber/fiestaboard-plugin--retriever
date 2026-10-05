@@ -1,5 +1,6 @@
 import EventKit
 import Foundation
+import RetrieverSourceKit
 
 /// Incomplete reminders due today, from the Reminders app.
 final class RemindersSource: Source {

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import RetrieverServer
+@testable import RetrieverSourceKit
 
 private let playing = MusicSource.Payload(state: "playing", title: "So What", artist: "Miles Davis", album: "Kind of Blue")
 

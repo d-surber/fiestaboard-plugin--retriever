@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Testing
 @testable import RetrieverServer
+@testable import RetrieverSourceKit
 
 private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 

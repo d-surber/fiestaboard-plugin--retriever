@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import RetrieverServer
+@testable import RetrieverSourceKit
 
 /// A source that answers with `value` after `delay`, `answers` times.
 private struct FakeSource: Source {

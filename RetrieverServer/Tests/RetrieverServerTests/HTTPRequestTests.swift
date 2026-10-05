@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import RetrieverServer
+@testable import RetrieverSourceKit
 
 private let body = Data([0x00, 0xff, 0x0d, 0x0a, 0x0d, 0x0a, 0x7f, 0x80])   // binary, with a blank line in it
 

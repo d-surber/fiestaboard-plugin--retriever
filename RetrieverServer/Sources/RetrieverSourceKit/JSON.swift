@@ -1,7 +1,7 @@
 import Foundation
 
 /// A JSON value, for data whose structure is not a Swift type: the schemas in Config.
-indirect enum JSON: Codable, Equatable {
+public indirect enum JSON: Codable, Equatable {
     case null
     case bool(Bool)
     case int(Int)
@@ -10,7 +10,7 @@ indirect enum JSON: Codable, Equatable {
     case array([JSON])
     case object([String: JSON])
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() { self = .null }
         else if let value = try? container.decode(Bool.self) { self = .bool(value) }
@@ -21,7 +21,7 @@ indirect enum JSON: Codable, Equatable {
         else { self = .object(try container.decode([String: JSON].self)) }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .null: try container.encodeNil()
@@ -36,8 +36,8 @@ indirect enum JSON: Codable, Equatable {
 }
 
 extension JSON: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, ExpressibleByArrayLiteral, ExpressibleByDictionaryLiteral {
-    init(stringLiteral value: String) { self = .string(value) }
-    init(integerLiteral value: Int) { self = .int(value) }
-    init(arrayLiteral elements: JSON...) { self = .array(elements) }
-    init(dictionaryLiteral elements: (String, JSON)...) { self = .object(Dictionary(uniqueKeysWithValues: elements)) }
+    public init(stringLiteral value: String) { self = .string(value) }
+    public init(integerLiteral value: Int) { self = .int(value) }
+    public init(arrayLiteral elements: JSON...) { self = .array(elements) }
+    public init(dictionaryLiteral elements: (String, JSON)...) { self = .object(Dictionary(uniqueKeysWithValues: elements)) }
 }

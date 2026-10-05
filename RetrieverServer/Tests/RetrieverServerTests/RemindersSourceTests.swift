@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import RetrieverServer
+@testable import RetrieverSourceKit
 
 @Test func remindersPayloadFitsItsSchema() throws {
     let source = RemindersSource()

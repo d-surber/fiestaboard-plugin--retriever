@@ -1,5 +1,6 @@
 import Foundation
 @testable import RetrieverServer
+@testable import RetrieverSourceKit
 
 // Helpers shared by the tests of the Source interface and of each source.
 
