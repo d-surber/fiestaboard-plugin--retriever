@@ -92,9 +92,10 @@ guard key != nil else {
 log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(config.seq)")
 startListener()
 
-// Ask every source once now. A source's first fetch can be slow or put a
-// permission question to the user, and that should not fall on the first
-// request.
+// Ask every source once now. A source's first fetch may put a permission
+// question to the user, as Reminders does after each rebuild, and reports
+// "timed out" until it is answered. Better that the question appears at
+// startup than on the first request.
 retrieve(from: sources, timeout: sourceTimeout) { entries in
     for (name, entry) in entries.sorted(by: { $0.key < $1.key }) where !entry.error.isEmpty {
         log("\(name) at startup: \(entry.error)")
