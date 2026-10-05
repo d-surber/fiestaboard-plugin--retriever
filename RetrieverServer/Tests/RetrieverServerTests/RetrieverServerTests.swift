@@ -17,12 +17,12 @@ private func request(ts: Int, id: String = "abc123") -> String {
 
 @Test func opensAnAuthenticRequest() throws {
     let body = try sealed(request(ts: 1_800_000_000))
-    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) == "abc123")
+    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now).id == "abc123")
 }
 
 @Test(arguments: [-60, 60]) func acceptsTimestampsWithinTheWindow(offset: Int) throws {
     let body = try sealed(request(ts: 1_800_000_000 + offset))
-    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) == "abc123")
+    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now).id == "abc123")
 }
 
 @Test(arguments: [-61, 61, -86_400]) func refusesStaleTimestamps(offset: Int) throws {
@@ -133,7 +133,7 @@ private func bytes(hex: String) -> Data {
     let request = try #require(vectors.requests_from_plugin[path])
     let key = try #require(Wire.key(base64: vectors.key))
     let at = Date(timeIntervalSince1970: TimeInterval(request.ts))
-    #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: key, now: at) == request.id)
+    #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: key, now: at).id == request.id)
     for other in Wire.paths where other != path {
         #expect(throws: Wire.Failure.unauthenticated) {
             try Wire.open(request: bytes(hex: request.body), path: other, key: key, now: at)
@@ -147,6 +147,13 @@ private func bytes(hex: String) -> Data {
     #expect(decoded.seq == vector.seq)
     #expect(decoded.seq == Config(sources: vectorSources).seq)
     #expect(decoded.data == vectorEntries)
+}
+
+@Test func serverResponseVectorIsTheStandInInfo() throws {
+    let (vector, decoded) = try Vectors.load().opened(Wire.serverPath, as: [String: JSON].self)
+    #expect(decoded.id == vector.id)
+    #expect(decoded.seq == Config(sources: vectorSources).seq)
+    #expect(decoded.data == vectorServerInfo)
 }
 
 /// The vectors come from `vectorSources`, not the server's own sources, so

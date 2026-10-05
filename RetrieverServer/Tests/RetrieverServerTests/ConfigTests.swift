@@ -39,7 +39,7 @@ private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
     let now = Date(timeIntervalSince1970: 1_800_000_000)
     let plaintext = Data(#"{"ts": 1800000000, "id": "abc123"}"#.utf8)
     let body = try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestContext(Wire.retrievePath)).combined
-    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) == "abc123")
+    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now).id == "abc123")
     #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.configPath, key: key, now: now) }
 }
 

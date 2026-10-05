@@ -7,6 +7,7 @@ side for the other to open; RetrieverServer's tests read the same file.
 """
 
 import base64
+import http.client
 import importlib.util
 import json
 import os
@@ -32,11 +33,12 @@ retriever = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(retriever)
 RetrieverPlugin = retriever.RetrieverPlugin
 
-RETRIEVE, CONFIG = retriever.RETRIEVE_PATH, retriever.CONFIG_PATH
+SERVER, CONFIG, RETRIEVE = retriever.SERVER_PATH, retriever.CONFIG_PATH, retriever.RETRIEVE_PATH
 KEY = bytes(range(32))
 KEY_B64 = base64.b64encode(KEY).decode()
 OTHER_KEY = bytes(range(1, 33))
 SEQ = 7
+SERVER_INFO = {"name": "FakeServer", "version": "9.9", "protocol": {"min": 1, "max": 1}, "extra": ["anything", 1]}
 SOURCES = {
     "reminders": {
         "type": "object",
@@ -67,6 +69,7 @@ class FakeServer:
     def __init__(self):
         self.key = KEY
         self.seq = SEQ
+        self.info = SERVER_INFO
         self.sources = SOURCES
         self.values = VALUES
         self.status = {}  # path -> (status, reason): refuse requests to that path
@@ -83,21 +86,25 @@ class FakeServer:
                 fake.paths.append(self.path)
                 fake.bodies.append(body)
                 time.sleep(fake.delay.get(self.path, 0))
-                if self.path not in (RETRIEVE, CONFIG):
-                    return self.answer(404, "Not Found")
+                if self.path not in (SERVER, CONFIG, RETRIEVE):
+                    return self.say_nothing()
                 if self.path in fake.status:
                     return self.answer(*fake.status[self.path])
                 try:
                     context = retriever.request_context(self.path)
                     plaintext = ChaCha20Poly1305(fake.key).decrypt(body[:12], body[12:], context)
                 except Exception:
-                    return self.answer(401, "Unauthorized")
+                    return self.say_nothing()
                 request = json.loads(plaintext)
                 fake.requests.append(request)
                 if fake.reply:
                     return self.answer(200, "OK", fake.reply(self.path, request))
-                data = fake.sources if self.path == CONFIG else fake.values
+                data = {SERVER: fake.info, CONFIG: fake.sources, RETRIEVE: fake.values}[self.path]
                 self.answer(200, "OK", fake.sealed(self.path, {"id": request["id"], "seq": fake.seq, "data": data}))
+
+            def say_nothing(self):
+                """Close the connection without a response, as a server does for a request it cannot decrypt."""
+                self.close_connection = True
 
             def answer(self, status, reason, body=b""):
                 try:
@@ -118,7 +125,7 @@ class FakeServer:
     def sealed(self, path, message, key=None):
         return seal(key or self.key, json.dumps(message).encode(), retriever.response_context(path))
 
-    def refuse(self, status, reason, paths=(RETRIEVE, CONFIG)):
+    def refuse(self, status, reason, paths=(SERVER, CONFIG, RETRIEVE)):
         self.status = {path: (status, reason) for path in paths}
 
     def stop(self):
@@ -156,8 +163,8 @@ def assert_failed(result, reason, values):
 
 
 def assert_retrieve_failed(result, reason):
-    """The config is known, so reminders has its schema's default."""
-    assert_failed(result, reason, {"reminders": NO_REMINDERS})
+    """The config is known, so reminders has its schema's default, and the server's info is kept."""
+    assert_failed(result, reason, {"reminders": NO_REMINDERS, "server": SERVER_INFO})
     assert retriever.CONFIG_PENDING not in result.error
 
 
@@ -174,13 +181,13 @@ class TestRetrieve:
         result = plugin.fetch_data()
         assert result.available is True
         assert result.error is None
-        assert result.data == {**VALUES, "error": ""}
+        assert result.data == {**VALUES, "server": SERVER_INFO, "error": ""}
         assert result.formatted_lines is None
 
     def test_a_source_with_its_own_error_passes_through(self, plugin, server):
         server.values = {"reminders": {"error": "Reminders could not be read", "data": NO_REMINDERS["data"]}}
         result = plugin.fetch_data()
-        assert result.data == {**server.values, "error": ""}
+        assert result.data == {**server.values, "server": SERVER_INFO, "error": ""}
         assert result.error is None
 
     def test_other_sources_pass_through(self, plugin, server):
@@ -190,9 +197,9 @@ class TestRetrieve:
     def test_request_carries_a_current_timestamp_and_a_fresh_id(self, plugin, server):
         plugin.fetch_data()
         ids = [request["id"] for request in server.requests]
-        assert len(set(ids)) == len(ids) == 2
+        assert len(set(ids)) == len(ids) == 3
         for request in server.requests:
-            assert set(request) == {"ts", "id"}
+            assert set(request) - {"protocol"} == {"ts", "id"}
             assert abs(request["ts"] - time.time()) < 5
             assert len(request["id"]) == 32
 
@@ -200,7 +207,7 @@ class TestRetrieve:
         plugin.fetch_data()
         plugin.fetch_data()
         nonces = [body[:12] for body in server.bodies]
-        assert len(set(nonces)) == len(nonces) == 3
+        assert len(set(nonces)) == len(nonces) == 4
 
     def test_nothing_readable_is_sent(self, plugin, server):
         plugin.fetch_data()
@@ -220,6 +227,16 @@ class TestRetrieve:
             plugin._fetch(server.url, RETRIEVE, KEY, time.monotonic() - 1)
         assert server.paths == []
 
+    def test_server_with_another_key_says_nothing(self, plugin, server):
+        plugin.fetch_data()
+        server.key = OTHER_KEY
+        assert_retrieve_failed(plugin.fetch_data(), "no response (wrong key?)")
+
+    def test_wrong_key_from_the_start(self, plugin, server):
+        server.key = OTHER_KEY
+        assert_config_pending(plugin.fetch_data(), "no response (wrong key?)")
+        assert server.paths == [SERVER]
+
     def test_refused_retrieve_shows_the_defaults_and_the_reason(self, plugin, server):
         plugin.fetch_data()
         server.refuse(400, "Stale Timestamp", [RETRIEVE])
@@ -235,7 +252,7 @@ class TestRetrieve:
         server.refuse(500, "Internal Server Error", [RETRIEVE])
         plugin.fetch_data()
         server.status = {}
-        assert plugin.fetch_data().data == {**VALUES, "error": ""}
+        assert plugin.fetch_data().data == {**VALUES, "server": SERVER_INFO, "error": ""}
 
     def test_unreachable_server_after_config(self, plugin, server):
         plugin.fetch_data()
@@ -287,7 +304,7 @@ class TestServerConfig:
         plugin.fetch_data()
         plugin.fetch_data()
         plugin.fetch_data()
-        assert server.paths == [CONFIG, RETRIEVE, RETRIEVE, RETRIEVE]
+        assert server.paths == [SERVER, CONFIG, RETRIEVE, RETRIEVE, RETRIEVE]
 
     @pytest.mark.parametrize("new_seq", [SEQ + 1, SEQ - 1, 0])
     def test_config_is_read_again_when_the_sequence_number_changes(self, plugin, server, new_seq):
@@ -295,11 +312,11 @@ class TestServerConfig:
         server.seq = new_seq
         server.sources = {"reminders": {"type": "object", "default": {"count": -1}}}
         result = plugin.fetch_data()
-        assert result.data == {**VALUES, "error": ""}
-        assert server.paths == [CONFIG, RETRIEVE, RETRIEVE, CONFIG]
+        assert result.data == {**VALUES, "server": SERVER_INFO, "error": ""}
+        assert server.paths == [SERVER, CONFIG, RETRIEVE, RETRIEVE, SERVER, CONFIG]
 
         plugin.fetch_data()
-        assert server.paths[4:] == [RETRIEVE]
+        assert server.paths[6:] == [RETRIEVE]
         server.refuse(500, "Internal Server Error", [RETRIEVE])
         assert plugin.fetch_data().data["reminders"] == {"error": "", "data": {"count": -1}}
 
@@ -307,7 +324,7 @@ class TestServerConfig:
         plugin.fetch_data()
         plugin.config = {"server_url": server.url, "key": KEY_B64, "refresh_seconds": 120}
         plugin.fetch_data()
-        assert server.paths == [CONFIG, RETRIEVE, CONFIG, RETRIEVE]
+        assert server.paths == [SERVER, CONFIG, RETRIEVE, SERVER, CONFIG, RETRIEVE]
 
     def test_defaults_come_from_the_servers_config(self, plugin, server):
         server.sources = {
@@ -319,13 +336,17 @@ class TestServerConfig:
         assert_failed(
             plugin.fetch_data(),
             "500 Internal Server Error",
-            {"reminders": {"error": "", "data": {"count": 0, "text": "NONE"}}, "calendar": {"error": "", "data": []}},
+            {
+                "reminders": {"error": "", "data": {"count": 0, "text": "NONE"}},
+                "calendar": {"error": "", "data": []},
+                "server": SERVER_INFO,
+            },
         )
 
     def test_no_source_is_known_before_the_config_is_read(self, plugin, server):
         server.refuse(401, "Unauthorized")
         assert_config_pending(plugin.fetch_data(), "401 Unauthorized")
-        assert server.paths == [CONFIG]
+        assert server.paths == [SERVER]
 
     def test_unreachable_server_before_the_config_is_read(self, plugin, server):
         server.stop()
@@ -335,18 +356,18 @@ class TestServerConfig:
         server.refuse(500, "Internal Server Error", [CONFIG])
         assert_config_pending(plugin.fetch_data(), "500 Internal Server Error")
         server.status = {}
-        assert plugin.fetch_data().data == {**VALUES, "error": ""}
-        assert server.paths == [CONFIG, CONFIG, RETRIEVE]
+        assert plugin.fetch_data().data == {**VALUES, "server": SERVER_INFO, "error": ""}
+        assert server.paths == [SERVER, CONFIG, SERVER, CONFIG, RETRIEVE]
 
     def test_values_are_kept_when_the_changed_config_cannot_be_read(self, plugin, server):
         plugin.fetch_data()
         server.seq = SEQ + 1
         server.refuse(500, "Internal Server Error", [CONFIG])
-        assert_config_pending(plugin.fetch_data(), "500 Internal Server Error", VALUES)
+        assert_config_pending(plugin.fetch_data(), "500 Internal Server Error", {**VALUES, "server": SERVER_INFO})
 
         server.status = {}
-        assert plugin.fetch_data().data == {**VALUES, "error": ""}
-        assert server.paths == [CONFIG, RETRIEVE, RETRIEVE, CONFIG, RETRIEVE, CONFIG]
+        assert plugin.fetch_data().data == {**VALUES, "server": SERVER_INFO, "error": ""}
+        assert server.paths == [SERVER, CONFIG, RETRIEVE, RETRIEVE, SERVER, CONFIG, RETRIEVE, SERVER, CONFIG]
 
     def test_a_config_response_cannot_be_passed_off_as_a_retrieve_response(self, plugin, server):
         plugin.fetch_data()
@@ -355,7 +376,7 @@ class TestServerConfig:
 
     def test_all_requests_in_one_fetch_share_the_time_budget(self, plugin, server, monkeypatch):
         monkeypatch.setattr(retriever, "TIMEOUT_SECONDS", 0.6)
-        server.delay = {CONFIG: 0.4, RETRIEVE: 0.4}
+        server.delay = {SERVER: 0.2, CONFIG: 0.2, RETRIEVE: 0.4}
         started = time.monotonic()
         result = plugin.fetch_data()
         assert time.monotonic() - started < 0.9
@@ -365,6 +386,68 @@ class TestServerConfig:
         monkeypatch.setattr(retriever, "TIMEOUT_SECONDS", 0.2)
         server.delay = {CONFIG: 0.5}
         assert_config_pending(plugin.fetch_data(), "timed out")
+
+
+class TestServerInfo:
+    def test_server_info_reaches_templates_unchanged(self, plugin, server):
+        server.info = {**SERVER_INFO, "os": "macOS 26.6.2", "host": "example", "port": 42511, "nested": {"a": [1, 2]}}
+        assert plugin.fetch_data().data["server"] == server.info
+
+    def test_server_is_asked_before_config(self, plugin, server):
+        plugin.fetch_data()
+        assert server.paths[:2] == [SERVER, CONFIG]
+
+    def test_server_request_names_no_protocol_and_the_others_name_the_chosen_one(self, plugin, server):
+        plugin.fetch_data()
+        by_path = dict(zip(server.paths, server.requests))
+        assert "protocol" not in by_path[SERVER]
+        assert by_path[CONFIG]["protocol"] == 1
+        assert by_path[RETRIEVE]["protocol"] == 1
+
+    @pytest.mark.parametrize("offered", [{"min": 1, "max": 1}, {"min": 0, "max": 5}, {"min": 1, "max": 99}])
+    def test_chooses_the_highest_protocol_both_sides_speak(self, plugin, server, offered, monkeypatch):
+        monkeypatch.setattr(retriever, "PROTOCOLS", (1, 2, 3))
+        server.info = {**SERVER_INFO, "protocol": offered}
+        plugin.fetch_data()
+        assert server.requests[-1]["protocol"] == min(3, offered["max"])
+
+    @pytest.mark.parametrize("offered", [{"min": 2, "max": 3}, {"min": 0, "max": 0}, {"min": 5, "max": 2}])
+    def test_no_common_protocol(self, plugin, server, offered):
+        server.info = {**SERVER_INFO, "protocol": offered}
+        assert_config_pending(plugin.fetch_data(), "no common protocol")
+        assert server.paths == [SERVER]
+
+    @pytest.mark.parametrize(
+        "info",
+        [
+            {"name": "x", "version": "1"},
+            {"protocol": [1, 1]},
+            {"protocol": {"min": 1}},
+            {"protocol": {"min": "1", "max": "1"}},
+            {"protocol": {"min": True, "max": True}},
+        ],
+    )
+    def test_server_info_without_a_usable_protocol_range(self, plugin, server, info):
+        server.info = info
+        assert_config_pending(plugin.fetch_data(), "no protocol range in server info")
+        assert server.paths == [SERVER]
+
+    def test_server_refuses_the_protocol(self, plugin, server):
+        plugin.fetch_data()
+        server.refuse(400, "Unsupported Protocol", [RETRIEVE])
+        assert_retrieve_failed(plugin.fetch_data(), "400 Unsupported Protocol")
+
+    def test_server_info_is_read_again_with_the_config(self, plugin, server):
+        plugin.fetch_data()
+        server.seq = SEQ + 1
+        server.info = {**SERVER_INFO, "version": "10.0"}
+        assert plugin.fetch_data().data["server"]["version"] == "10.0"
+
+    def test_a_source_cannot_take_the_reserved_names(self, plugin, server):
+        server.values = {**VALUES, "server": {"error": "", "data": "impostor"}, "error": {"error": "", "data": "impostor"}}
+        data = plugin.fetch_data().data
+        assert data["server"] == SERVER_INFO
+        assert data["error"] == ""
 
 
 class TestDescribe:
@@ -381,6 +464,9 @@ class TestDescribe:
             (urllib.error.URLError("unknown url type"), "<urlopen error unknown url type>"),
             (ValueError("wrong ID in response"), "wrong ID in response"),
             (KeyError(), "KeyError"),
+            (http.client.RemoteDisconnected("Remote end closed connection without response"), "no response (wrong key?)"),
+            (ConnectionResetError(54, "Connection reset by peer"), "no response (wrong key?)"),
+            (urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer")), "no response (wrong key?)"),
         ],
     )
     def test_reason(self, error, reason):
@@ -415,7 +501,7 @@ class TestInterop:
 
     key = base64.b64decode(VECTORS["key"])
 
-    @pytest.mark.parametrize("path", [RETRIEVE, CONFIG])
+    @pytest.mark.parametrize("path", [SERVER, CONFIG, RETRIEVE])
     def test_opens_a_response_sealed_by_the_server(self, path):
         vector = VECTORS["responses_from_server"][path]
         seq, data = retriever.open_response(self.key, bytes.fromhex(vector["body"]), vector["id"], path)
@@ -430,17 +516,20 @@ class TestInterop:
             assert retriever.default_for(schema) == schema["default"]
             assert set(values[name]) == {"error", "data"}
 
-    @pytest.mark.parametrize("path", [RETRIEVE, CONFIG])
+    @pytest.mark.parametrize("path", [SERVER, CONFIG, RETRIEVE])
     def test_request_vector_is_what_the_plugin_seals(self, path):
         """The server's tests open this body; check here that it is still a current-format request."""
         vector = VECTORS["requests_from_plugin"][path]
         body = bytes.fromhex(vector["body"])
         plaintext = ChaCha20Poly1305(self.key).decrypt(body[:12], body[12:], retriever.request_context(path))
-        assert json.loads(plaintext) == {"ts": vector["ts"], "id": vector["id"]}
+        expected = {"ts": vector["ts"], "id": vector["id"]}
+        if "protocol" in vector:
+            expected["protocol"] = vector["protocol"]
+        assert json.loads(plaintext) == expected
 
-        fresh, request_id = retriever.seal_request(self.key, vector["ts"], path)
+        fresh, request_id = retriever.seal_request(self.key, vector["ts"], path, vector.get("protocol"))
         plaintext = ChaCha20Poly1305(self.key).decrypt(fresh[:12], fresh[12:], retriever.request_context(path))
-        assert json.loads(plaintext) == {"ts": vector["ts"], "id": request_id}
+        assert json.loads(plaintext) == {**expected, "id": request_id}
 
 
 class TestConfig:

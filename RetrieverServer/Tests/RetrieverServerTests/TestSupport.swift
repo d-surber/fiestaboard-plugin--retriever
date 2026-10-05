@@ -43,6 +43,11 @@ let vectorSources: [FixedSource] = [
         value: ["text": "na\u{EF}ve caf\u{E9}"]),
 ]
 
+/// The server information in the vectors: a stand-in, like the sources.
+let vectorServerInfo: [String: JSON] = [
+    "name": "VectorServer", "version": "1.2.3", "protocol": ["min": 1, "max": 1], "extra": ["anything", 1],
+]
+
 /// What `vectorSources` report, as a retrieve response carries it.
 var vectorEntries: [String: Entry] {
     Dictionary(uniqueKeysWithValues: vectorSources.map { ($0.name, Entry(error: "", data: $0.value)) })

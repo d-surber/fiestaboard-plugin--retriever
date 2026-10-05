@@ -32,6 +32,7 @@ if CommandLine.arguments.dropFirst().first == "status" {
 
 let sources = allSources + connectModules()
 let config = Config(sources: sources)
+let serverInfo = ServerInfo.current(port: port.rawValue)
 let sourceTimeout: TimeInterval = 3   // the plugin gives a whole fetch 4 s
 var activeListener: NWListener?
 
@@ -57,29 +58,31 @@ func readRequest(_ conn: NWConnection, _ buffer: Data = Data(), _ done: @escapin
     }
 }
 
+// Closes the connection without a response: for anything that has not shown
+// the key. The reason goes to the log only.
+func drop(_ conn: NWConnection, _ reason: String) {
+    conn.cancel()
+    log("-> no response (\(reason))")
+}
+
 func handle(_ conn: NWConnection) {
     conn.start(queue: .main)
     readRequest(conn) { request in
-        guard let request, let key else { return respond(conn, "400 Bad Request") }
+        guard let request, let key else { return drop(conn, "not a request") }
         log("\(conn.endpoint) \(request.line)")
         let parts = request.line.split(separator: " ")
         guard parts.count >= 2, let path = URLComponents(string: String(parts[1]))?.path, Wire.paths.contains(path) else {
-            return respond(conn, "404 Not Found")
+            return drop(conn, "unknown path")
         }
         guard parts[0] == "POST" else {
-            return respond(conn, "405 Method Not Allowed")
+            return drop(conn, "not POST")
         }
         let id: String
         do {
-            id = try Wire.open(request: request.body, path: path, key: key)
-        } catch Wire.Failure.stale {
-            // Authentic but old or from a wrong clock. Said distinctly so that
-            // clock skew is not mistaken for a wrong key.
-            return respond(conn, "400 Stale Timestamp")
-        } catch Wire.Failure.malformed {
-            return respond(conn, "400 Bad Request")
+            id = try Wire.open(request: request.body, path: path, key: key).id
         } catch {
-            return respond(conn, "401 Unauthorized")
+            guard let status = (error as? Wire.Failure)?.status else { return drop(conn, "does not decrypt") }
+            return respond(conn, status)
         }
         func send<Body: Codable>(_ data: Body) {
             guard let body = try? Wire.seal(response: data, id: id, seq: config.seq, path: path, key: key) else {
@@ -87,6 +90,7 @@ func handle(_ conn: NWConnection) {
             }
             respond(conn, "200 OK", body)
         }
+        if path == Wire.serverPath { return send(serverInfo) }
         if path == Wire.configPath { return send(config.schemas) }
         retrieve(from: sources, timeout: sourceTimeout) { send($0) }
     }
