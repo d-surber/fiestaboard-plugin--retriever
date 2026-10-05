@@ -2,8 +2,8 @@
   "id": "retriever",
   "name": "Retriever",
   "version": "1.0.0",
-  "description": "A brief description of what this plugin does.",
-  "author": "Your Name",
+  "description": "Shows values retrieved from a companion server. Under construction.",
+  "author": "d-surber",
   "icon": "puzzle",
   "category": "utility",
   "repository": "https://github.com/d-surber/fiestaboard-plugin--retriever",
@@ -76,38 +76,27 @@
     }
   },
 
-  "_teaser_comment": "One line of literal board text, max 15 tiles (the Note width, so it fits every board). Shown as a split-flap strip on your plugin's directory card. Colour markers like {66} count as ONE tile, not four characters.",
-  "teaser": "Value: 123 {66}",
+  "teaser": "REMINDERS: 2",
 
-  "_previews_comment": "Literal board rows showing what your plugin looks like. Rows may be shorter than the board (padded with blanks) but never longer. Add a note_array entry if your plugin is composed for one.",
   "previews": [
     {
       "device_type": "flagship",
       "rows": [
-        "                      ",
-        "          OK          ",
-        "      Value: 123      ",
-        "      Value: 123      ",
-        "                      ",
-        "                      "
+        "     Reminders: 2",
+        "",
+        "",
+        "WATER PLANTS",
+        "CALL DENTIST",
+        ""
       ]
     },
     {
       "device_type": "note",
       "rows": [
-        "      OK       ",
-        "  Value: 123   ",
-        "               "
+        "REMINDERS: 2",
+        "",
+        "WATER PLANTS"
       ]
-    }
-  ],
-
-  "screenshots": [
-    {
-      "src": "docs/board-display.png",
-      "alt": "Retriever displayed on a Vestaboard",
-      "caption": "Example board output using the default template",
-      "primary": true
     }
   ]
 }

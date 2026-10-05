@@ -1,1 +1,1 @@
-"""Tests for the template plugin."""
+"""Tests for the Retriever plugin."""

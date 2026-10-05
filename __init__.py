@@ -134,13 +134,6 @@ class RetrieverPlugin(PluginBase):
         """
         Validate plugin configuration.
 
-        This method is called when configuration is updated.
-        Note: refresh_seconds validation is handled automatically by
-        the base class using the manifest's settings_schema bounds.
-
-        Args:
-            config: The configuration dictionary to validate
-
         Returns:
             List of error messages (empty if valid)
         """
@@ -158,11 +151,3 @@ class RetrieverPlugin(PluginBase):
             errors.append("Key must be the base64 of 32 bytes")
 
         return errors
-
-    def cleanup(self) -> None:
-        """
-        Cleanup when plugin is disabled.
-
-        Override this to clean up any resources (close connections, etc.)
-        """
-        logger.info(f"Plugin {self.plugin_id} cleanup")
