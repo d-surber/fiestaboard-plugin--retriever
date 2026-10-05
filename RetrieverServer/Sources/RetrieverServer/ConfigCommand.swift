@@ -4,34 +4,25 @@ import LocalAuthentication
 import RetrieverSourceKit
 import Security
 
-// The server's commands for the module config. They serve nothing and exit.
-//
-//   RetrieverServer config sign [--days N] [module identifier ...]
-//       Run as yourself. Writes a config naming those modules (or, with
-//       none named, the modules of the current config), signs it with this
-//       Mac's config key, and leaves it waiting to be installed. The key
-//       lives in the Secure Enclave and each signature needs Touch ID or
-//       your password; the first signing creates it.
-//
-//   sudo RetrieverServer config install
-//       Checks the waiting config's signature and copies it into the
-//       root-owned location the server reads.
-//
-//   RetrieverServer status
-//       Says which config key is trusted, whether the config is valid, when
-//       it expires, and whether each module it lists can be reached.
+// The server's commands for the module config. They serve nothing and exit;
+// `RetrieverServer help` describes them all.
 //
 // Signing and installing are separate on purpose: signing needs the person,
 // installing needs an administrator, and neither step can do the other's job.
-// A config can equally be signed elsewhere with ordinary tools:
+// The key lives in the Secure Enclave and each signature needs Touch ID or
+// the account password; the first signing creates it. A config can equally
+// be signed elsewhere with ordinary tools:
 //   openssl dgst -sha256 -sign key.pem -out config.sig config.json
 enum ConfigCommand {
     static func run(_ arguments: [String]) -> Never {
         do {
+            let rest = Array(arguments.dropFirst())
             switch arguments.first {
-            case "sign": try sign(Array(arguments.dropFirst()))
+            case "sign": try sign(rest)
+            case "add": try add(rest)
+            case "remove": try remove(rest)
             case "install": try install()
-            default: throw Problem("usage: RetrieverServer config sign [--days N] [module identifier ...] | config install")
+            default: throw Problem("Unknown config command. See: \"\(program)\" help")
             }
         } catch {
             print("\(error)")
@@ -50,30 +41,97 @@ enum ConfigCommand {
 
     // MARK: sign
 
-    static func sign(_ arguments: [String]) throws {
-        guard getuid() != 0 else { throw Problem("Sign as yourself, not with sudo: the config key answers to your Touch ID or password.") }
+    /// `--days N` and `--pin`, and whatever else was given.
+    struct Options: Equatable {
         var days = Int(ModuleConfig.validity / 86400)
-        var identifiers: [String] = []
-        var rest = arguments[...]
-        while let argument = rest.popFirst() {
-            if argument == "--days" {
-                guard let value = rest.popFirst().flatMap(Int.init), value > 0 else { throw Problem("--days needs a number of days") }
-                days = value
-            } else {
-                identifiers.append(argument)
+        var pin = false
+        var names: [String] = []
+
+        init(_ arguments: [String]) throws {
+            var rest = arguments[...]
+            while let argument = rest.popFirst() {
+                switch argument {
+                case "--days":
+                    guard let value = rest.popFirst().flatMap(Int.init), value > 0 else { throw Problem("--days needs a number of days") }
+                    days = value
+                case "--pin":
+                    pin = true
+                default:
+                    names.append(argument)
+                }
             }
         }
+    }
 
+    static var installedConfig: ModuleConfig? {
+        (try? Data(contentsOf: ConfigStore.installed.appendingPathComponent(ConfigStore.configFile))).flatMap(ModuleConfig.decode)
+    }
+
+    /// The list after allowing `added`: each replaces any entry for the same module.
+    static func allowing(_ added: [ModuleConfig.Module], in modules: [ModuleConfig.Module]) -> [ModuleConfig.Module] {
+        modules.filter { existing in !added.contains { $0.identifier == existing.identifier } } + added
+    }
+
+    /// config sign: sign the current list again, or, with no config yet,
+    /// a list of every installed module. Naming modules replaces the list.
+    static func sign(_ arguments: [String]) throws {
+        let options = try Options(arguments)
+        var modules = options.names.map { ModuleConfig.Module(identifier: $0) }
+        if modules.isEmpty { modules = installedConfig?.modules ?? [] }
+        if modules.isEmpty {
+            modules = Installation.modules(in: Installation.programs).accepted.map { ModuleConfig.Module(identifier: $0.identifier) }
+        }
+        guard !modules.isEmpty else { throw Problem("There are no installed modules to allow. Install first: sudo \"\(program)\" install") }
+        try stage(modules, days: options.days)
+    }
+
+    /// config add: allow a module, named by its program's path or its identifier.
+    static func add(_ arguments: [String]) throws {
+        let options = try Options(arguments)
+        guard !options.names.isEmpty else { throw Problem("Name the module to allow: its program, or its identifier.") }
+        let installed = Installation.modules(in: Installation.programs).accepted
+        var added: [ModuleConfig.Module] = []
+        for name in options.names {
+            let module: Signer.Program
+            if FileManager.default.fileExists(atPath: name) {
+                do { module = try Signer.inspect(name) } catch { throw Problem("Not added: \(error).") }
+            } else if let found = installed.first(where: { $0.identifier == name }) {
+                module = found
+            } else {
+                throw Problem("Not added: no installed module is signed as \"\(name)\", and there is no such file.")
+            }
+            guard module.identifier.hasPrefix(Installation.moduleIdentifierPrefix) else {
+                throw Problem("Not added: \(module.path) is signed as \"\(module.identifier)\", which is not a module.")
+            }
+            added.append(ModuleConfig.Module(identifier: module.identifier, cdhash: options.pin ? module.cdhash : nil))
+        }
+        try stage(allowing(added, in: installedConfig?.modules ?? []), days: options.days)
+    }
+
+    /// config remove: stop allowing a module.
+    static func remove(_ arguments: [String]) throws {
+        let options = try Options(arguments)
+        let current = installedConfig?.modules ?? []
+        let remaining = current.filter { !options.names.contains($0.identifier) }
+        guard remaining.count < current.count else { throw Problem("Nothing removed: the config allows none of those.") }
+        try stage(remaining, days: options.days)
+    }
+
+    /// Shows what a config would allow, signs it, and leaves it waiting to be installed.
+    static func stage(_ modules: [ModuleConfig.Module], days: Int) throws {
+        guard getuid() != 0 else { throw Problem("Sign as yourself, not with sudo: the config key answers to your Touch ID or password.") }
         let pending = ConfigStore.pending(home: FileManager.default.homeDirectoryForCurrentUser)
         try FileManager.default.createDirectory(at: pending, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let previous = (try? Data(contentsOf: ConfigStore.installed.appendingPathComponent(ConfigStore.configFile))).flatMap(ModuleConfig.decode)
-
-        let modules = identifiers.isEmpty ? (previous?.modules ?? []) : identifiers.map { ModuleConfig.Module(identifier: $0) }
-        guard !modules.isEmpty else { throw Problem("Name the modules to allow, for example: config sign \(Signer.moduleIdentifier(for: "os"))") }
-        let config = ModuleConfig(version: (previous?.version ?? 0) + 1,
+        let config = ModuleConfig(version: (installedConfig?.version ?? 0) + 1,
                                   expires: Date().addingTimeInterval(TimeInterval(days) * 86400),
                                   modules: modules)
         let bytes = config.encoded()
+
+        print("Module config version \(config.version), valid for \(days) days, will allow:")
+        if modules.isEmpty { print("  no modules") }
+        for module in modules {
+            print("  \(module.identifier)" + (module.cdhash.map { ", only the build \($0)" } ?? ""))
+        }
 
         let (key, blob, created) = try configKey(pending: pending)
         if created { print("Created a config key in this Mac's Secure Enclave.") }
@@ -85,9 +143,7 @@ enum ConfigCommand {
         try Data(key.publicKey.pemRepresentation.utf8).write(to: pending.appendingPathComponent(ConfigStore.publicKeyFile))
         try blob.write(to: pending.appendingPathComponent(ConfigStore.keyBlobFile))
 
-        print("Signed module config version \(config.version), valid for \(days) days, for:")
-        for module in modules { print("  \(module.identifier)") }
-        print("It is waiting in \(pending.path).")
+        print("Signed. It is waiting in \(pending.path).")
         print("Install it with: sudo \"\(program)\" config install")
     }
 
@@ -154,6 +210,13 @@ enum ConfigCommand {
 
     static func status() -> Never {
         let now = Date()
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let installed = Installation.modules(in: Installation.programs)
+        print("Programs: \(Installation.programs.path)" + (installed.accepted.isEmpty ? " (no modules installed)" : ""))
+        for module in installed.accepted { print("  installed module \(module.identifier), build \(module.cdhash.prefix(12))…") }
+        for name in installed.refused { print("  \(name): not signed by this server's signer") }
+        print("Transport key: " + (Installation.transportKey(home: home).flatMap(Wire.key(base64:)) != nil
+                                    ? Installation.transportKeyFile(home: home).path : "none for this account"))
         let builtIn = ConfigStore.builtInKey()
         if let trusted = ConfigStore.trustedKey(in: ConfigStore.installed, builtIn: builtIn) {
             print("Config key: \(trusted.origin)")

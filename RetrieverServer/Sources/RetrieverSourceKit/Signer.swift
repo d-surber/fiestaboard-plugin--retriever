@@ -18,8 +18,39 @@ public enum Signer {
 
     public enum Failure: Error, CustomStringConvertible {
         case notSigned
+        case notOurs(String)   // a program that is unsigned, or signed by someone else
 
-        public var description: String { "this program is not signed with an identity" }
+        public var description: String {
+            switch self {
+            case .notSigned: return "this program is not signed with an identity"
+            case .notOurs(let path): return "\(path) is not signed by this program's signer"
+            }
+        }
+    }
+
+    /// A program on disk that is signed by this program's signer.
+    public struct Program: Equatable {
+        public let path: String
+        public let identifier: String
+        public let cdhash: String   // identifies the exact build
+    }
+
+    /// Reads a program's signature. Throws unless it is signed by this
+    /// program's signer; its identifier is whatever it was signed with.
+    public static func inspect(_ path: String) throws -> Program {
+        var code: SecStaticCode?
+        var information: CFDictionary?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let info = information as? [String: Any],
+              let identifier = info[kSecCodeInfoIdentifier as String] as? String,
+              let unique = info[kSecCodeInfoUnique as String] as? Data
+        else { throw Failure.notOurs(path) }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(try Signer.requirement(identifier: identifier) as CFString, [], &requirement) == errSecSuccess,
+              let requirement, SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
+        else { throw Failure.notOurs(path) }
+        return Program(path: path, identifier: identifier, cdhash: unique.map { String(format: "%02x", $0) }.joined())
     }
 
     /// The requirement "signed by my signer, with this identifier", and

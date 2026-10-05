@@ -6,13 +6,29 @@ import Network
 setvbuf(stdout, nil, _IOLBF, 0)   // flush log lines immediately under launchd
 
 let port: NWEndpoint.Port = 42511
-let key = Wire.key(base64: ProcessInfo.processInfo.environment["RETRIEVER_KEY"] ?? "")
 
 
-// Commands that serve nothing and exit: see ConfigCommand.
+// Commands that serve nothing and exit; `help` describes them.
 let arguments = Array(CommandLine.arguments.dropFirst())
-if arguments.first == "config" { ConfigCommand.run(Array(arguments.dropFirst())) }
-if arguments.first == "status" { ConfigCommand.status() }
+switch arguments.first {
+case nil: break   // no command: be the server
+case "install": InstallCommand.run()
+case "config": ConfigCommand.run(Array(arguments.dropFirst()))
+case "status": ConfigCommand.status()
+case "help", "--help", "-h":
+    print(Help.text(program: ConfigCommand.program))
+    exit(0)
+default:
+    print("Unknown command \"\(arguments[0])\".\n")
+    print(Help.text(program: ConfigCommand.program))
+    exit(2)
+}
+
+logToUserFile()
+
+// The key shared with the plugin belongs to one account. The agents are
+// installed for every account; in one with no key there is nothing to serve.
+let key = Installation.transportKey(home: FileManager.default.homeDirectoryForCurrentUser).flatMap(Wire.key(base64:))
 
 // What is served: the built-in sources, and the modules a valid, signed,
 // unexpired module config lists.
@@ -101,8 +117,8 @@ func startListener() {
 }
 
 guard key != nil else {
-    log("Set RETRIEVER_KEY (base64 of 32 random bytes) before starting.")
-    exit(1)
+    log("No transport key for this account; not serving.")
+    exit(0)
 }
 
 state.refresh()

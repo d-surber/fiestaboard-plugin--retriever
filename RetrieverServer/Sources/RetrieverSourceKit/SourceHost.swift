@@ -32,6 +32,7 @@ public enum SourceHost {
             print(service)
             exit(0)
         }
+        logToUserFile()
         let listener = NSXPCListener(machServiceName: service)
         do {
             // Only the server, signed by the signer of this module, may connect.
