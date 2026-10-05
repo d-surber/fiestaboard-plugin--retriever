@@ -1,29 +1,83 @@
 {
   "_comment": "Messages sealed by each side for the other to open. The key is a test key: bytes 0 to 31. Read by tests/test_plugin.py and by RetrieverServer's tests.",
   "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  "request_from_plugin": {
-    "ts": 1800000000,
-    "id": "2d7da40b194c93add118165d8c2720c6",
-    "body": "267069059652801dcba4c8961c49afe36955e816bf935138ff3f10fb82738c5fde0dadb0c03f1149688c2da0e3dd136d46725d6586748883953138625801bec529665011d7947b44ba5cb311bba9cf924c1557bb88bb4764"
+  "requests_from_plugin": {
+    "/retrieve": {
+      "ts": 1800000000,
+      "id": "ee53764c3dbaed8bd42a5dab87a13e7b",
+      "body": "4a8b06639c9b72015dbba66bc0a5712a1667e6dabeecac40b2aa3b50de90ca3498f5ddb35fb3b4cb99fb3ee9d8b9ffef970c349c27a1bb3b2b59d13b914cbc93dd99bd6b0e1db9f08f2607ad196bf91cbc75ce8ced7ca52a"
+    },
+    "/config": {
+      "ts": 1800000000,
+      "id": "1fcb87b9be0dd8769446360989cd51aa",
+      "body": "20fd3d447d457786c3c8594243d562d6585527ee11ec8dd3c94525c4292d86cee51d91e9ebc8fb511df6cb66494137747b325a8c4f1897cd9b2f1e174e4deedd6f112d1bde9c3192d717fc7d83b7d448bea2262a5fb66386"
+    }
   },
-  "response_from_server": {
-    "id": "00112233445566778899aabbccddeeff",
-    "body": "f628d637c52e7261cd4c263017f2751f32bcc8e9d4ce55263720eb52d883e41e64d7e3f29a6c4cf8ef0b16ab09df6a0f86a0f43e90e8f2780f16de756c0e617521010cb1ed893fb32af28b548f3157e1ed2c275267ed4e3ab0278f3387d2a8804fcb112d1acb128bef856fa88de5f65e1bae661099b898a560e18a88eb7489af7d8794376805b33e386e444c036a957133322cf3c9d44fa1d562b54e91e4d334883ab9d365fb987031ba39fad5d79b2662da0e03c808a3244f7b5d4b8103a365b94637b13403146032bb6539c80399d36ee6a2f28bd43e91dc8d1a71df68b8afa781",
-    "values": {
-      "reminders": {
-        "data": {
-          "text": "TEST0",
-          "count": 1,
-          "items": [
-            {
-              "due": "2027-01-15T08:15:00Z",
-              "priority": 0,
-              "list": "Reminders",
-              "title": "test0"
+  "responses_from_server": {
+    "/retrieve": {
+      "id": "00112233445566778899aabbccddeeff",
+      "seq": 2607662442,
+      "body": "43c2b973d62a678109fb2e53b9c0a197cebee9be9d94ea8311eeb228ce28e273d9791191235f12ece38b1f3c88ef05c3cd076716c88274b28a1d29db027c1f1771b6ff54d1c819910a56fad83bf3276838c905a3145feddc72b36ecd53978b73a961b9b94aa48f712b293d99d8005de209028672b8e276d8ec5630088a6179c79b5a013979e5c7f891077d9f07912c051a62a98346bdb516e007a889221bf54ebf8f6c01bba61fd1e020e34fdacdd19e77dbf7721f1b148f4c0243fd92866187946164bf298d69956b0fd60354d57c3ead41e5da509a2137d89dc141f81a498e4211ae066d21434f672fd20e8ad50f2dd85d18",
+      "data": {
+        "reminders": {
+          "data": {
+            "count": 1,
+            "text": "TEST0",
+            "items": [
+              {
+                "due": "2027-01-15T08:15:00Z",
+                "list": "Reminders",
+                "title": "test0",
+                "priority": 0
+              }
+            ]
+          },
+          "error": ""
+        }
+      }
+    },
+    "/config": {
+      "id": "00112233445566778899aabbccddeeff",
+      "seq": 2607662442,
+      "body": "8afa2bde9503e74b8bab3ab1363013749971de7c2e01f44e0182ae0b49faa4ef3e5a626cde5cc49f58fb15d443bb22851b4a9a71f6ff7c5f79ad74be67f1f6413f5203c6ef9c7374a2fa9040c407ef460ed24faf78de900de14241a934468f7e14823f1e20c2faa4e4f4c79722778440431e92d0107503b976a368fb7c7ad50964dfcfd4794986a5c1ac3170aeb1ef48e777e702850014b42fee76a1b151538b1bf38cc766260af4e91b8a94490807a02b8a3fb2e1f8c265369b14e6b4ae1346a28d2b6b6b66cb9e55f639bbd0c64ed9abcd0fda12e708166230d4b2a59114a7483b63c7caa87f962677f644711818b0f32b3050bc3e33684e916ac74d0303fae4ab6268d2866f9729e06bcb03ad40953e37c70f49d9dd8e4d4c4ffc889d822be41b826cc2515cbba7abe9c084067de030e1104d11973c61a18523522d80f9e8ce66e88c946d592a2f4d6e3f3fb307861b815607b41463366434351dc963213c01320031905fd835a03b59bb6c4073bb65fb3baeb2b48266be51e6846cefe86fed0d3f0f55d7e4182b88a7d001ea789ae81e2eb2ee0f3fa97ddeb08485e17b071bd9d90a5c7d0f3b9c67a1",
+      "data": {
+        "reminders": {
+          "default": {
+            "text": "",
+            "count": 0,
+            "items": []
+          },
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "list": {
+                    "type": "string"
+                  },
+                  "due": {
+                    "format": "date-time",
+                    "type": "string"
+                  }
+                }
+              }
             }
-          ]
-        },
-        "error": ""
+          },
+          "type": "object"
+        }
       }
     }
   }

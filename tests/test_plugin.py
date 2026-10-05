@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -31,9 +32,18 @@ retriever = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(retriever)
 RetrieverPlugin = retriever.RetrieverPlugin
 
+RETRIEVE, CONFIG = retriever.RETRIEVE_PATH, retriever.CONFIG_PATH
 KEY = bytes(range(32))
 KEY_B64 = base64.b64encode(KEY).decode()
 OTHER_KEY = bytes(range(1, 33))
+SEQ = 7
+SOURCES = {
+    "reminders": {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}, "text": {"type": "string"}, "items": {"type": "array"}},
+        "default": {"count": 0, "text": "", "items": []},
+    }
+}
 VALUES = {
     "reminders": {
         "error": "",
@@ -57,9 +67,13 @@ class FakeServer:
 
     def __init__(self):
         self.key = KEY
+        self.seq = SEQ
+        self.sources = SOURCES
         self.values = VALUES
-        self.status = None  # refuse every request with this (status, reason)
-        self.reply = None  # replace the response body: f(request dict) -> bytes
+        self.status = {}  # path -> (status, reason): refuse requests to that path
+        self.delay = {}  # path -> seconds to wait before answering
+        self.reply = None  # replace the response body: f(path, request dict) -> bytes
+        self.paths: list[str] = []
         self.requests: list[dict] = []
         self.bodies: list[bytes] = []
         fake = self
@@ -67,27 +81,33 @@ class FakeServer:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
+                fake.paths.append(self.path)
                 fake.bodies.append(body)
-                if self.path != "/retrieve":
+                time.sleep(fake.delay.get(self.path, 0))
+                if self.path not in (RETRIEVE, CONFIG):
                     return self.answer(404, "Not Found")
-                if fake.status:
-                    return self.answer(*fake.status)
+                if self.path in fake.status:
+                    return self.answer(*fake.status[self.path])
                 try:
-                    plaintext = ChaCha20Poly1305(fake.key).decrypt(body[:12], body[12:], retriever.REQUEST_CONTEXT)
+                    context = retriever.request_context(self.path)
+                    plaintext = ChaCha20Poly1305(fake.key).decrypt(body[:12], body[12:], context)
                 except Exception:
                     return self.answer(401, "Unauthorized")
                 request = json.loads(plaintext)
                 fake.requests.append(request)
                 if fake.reply:
-                    return self.answer(200, "OK", fake.reply(request))
-                message = json.dumps({"id": request["id"], "data": fake.values}).encode()
-                self.answer(200, "OK", seal(fake.key, message, retriever.RESPONSE_CONTEXT))
+                    return self.answer(200, "OK", fake.reply(self.path, request))
+                data = fake.sources if self.path == CONFIG else fake.values
+                self.answer(200, "OK", fake.sealed(self.path, {"id": request["id"], "seq": fake.seq, "data": data}))
 
             def answer(self, status, reason, body=b""):
-                self.send_response(status, reason)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.send_response(status, reason)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except OSError:
+                    pass  # the plugin gave up waiting
 
             def log_message(self, *args):
                 pass
@@ -95,6 +115,12 @@ class FakeServer:
         self._httpd = HTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_port}"
         threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+
+    def sealed(self, path, message, key=None):
+        return seal(key or self.key, json.dumps(message).encode(), retriever.response_context(path))
+
+    def refuse(self, status, reason, paths=(RETRIEVE, CONFIG)):
+        self.status = {path: (status, reason) for path in paths}
 
     def stop(self):
         self._httpd.shutdown()
@@ -122,15 +148,26 @@ def plugin(manifest, server):
     return plugin
 
 
-def assert_failed(result, reason=""):
-    """Templates still render: no reminders, and the reason in ``error``."""
+def assert_failed(result, reason, values):
+    """Templates still render: *values*, and the reason in ``error``."""
     assert result.available is True
-    assert result.data["reminders"] == NO_REMINDERS
-    assert result.data["error"] and reason in result.data["error"]
+    assert result.data == {**values, "error": result.data["error"]}
+    assert result.data["error"].startswith(reason)
     assert result.error == result.data["error"]
 
 
-class TestFetch:
+def assert_retrieve_failed(result, reason):
+    """The config is known, so reminders has its schema's default."""
+    assert_failed(result, reason, {"reminders": NO_REMINDERS})
+    assert retriever.CONFIG_PENDING not in result.error
+
+
+def assert_config_pending(result, reason, values=None):
+    assert_failed(result, reason, values or {})
+    assert result.error == f"{reason}; config pending"
+
+
+class TestRetrieve:
     def test_plugin_id(self, plugin):
         assert plugin.plugin_id == "retriever"
 
@@ -141,101 +178,237 @@ class TestFetch:
         assert result.data == {**VALUES, "error": ""}
         assert result.formatted_lines is None
 
-    def test_a_value_with_its_own_error_passes_through(self, plugin, server):
+    def test_a_source_with_its_own_error_passes_through(self, plugin, server):
         server.values = {"reminders": {"error": "Reminders could not be read", "data": NO_REMINDERS["data"]}}
         result = plugin.fetch_data()
         assert result.data == {**server.values, "error": ""}
         assert result.error is None
 
-    def test_other_names_pass_through(self, plugin, server):
+    def test_other_sources_pass_through(self, plugin, server):
         server.values = {**VALUES, "calendar": {"error": "", "data": [1, "two", None]}}
         assert plugin.fetch_data().data["calendar"] == {"error": "", "data": [1, "two", None]}
 
     def test_request_carries_a_current_timestamp_and_a_fresh_id(self, plugin, server):
         plugin.fetch_data()
-        plugin.fetch_data()
-        first, second = server.requests
-        assert set(first) == {"ts", "id"}
-        assert abs(first["ts"] - time.time()) < 5
-        assert len(first["id"]) == 32
-        assert first["id"] != second["id"]
+        ids = [request["id"] for request in server.requests]
+        assert len(set(ids)) == len(ids) == 2
+        for request in server.requests:
+            assert set(request) == {"ts", "id"}
+            assert abs(request["ts"] - time.time()) < 5
+            assert len(request["id"]) == 32
 
     def test_every_request_has_a_new_nonce(self, plugin, server):
         plugin.fetch_data()
         plugin.fetch_data()
-        assert server.bodies[0][:12] != server.bodies[1][:12]
+        nonces = [body[:12] for body in server.bodies]
+        assert len(set(nonces)) == len(nonces) == 3
 
     def test_nothing_readable_is_sent(self, plugin, server):
         plugin.fetch_data()
-        assert b"ts" not in server.bodies[0]
-        assert KEY not in server.bodies[0]
+        assert all(b"ts" not in body and KEY not in body for body in server.bodies)
 
     def test_trailing_slash_in_server_url(self, plugin, server):
         plugin.config = {"server_url": server.url + "/", "key": KEY_B64}
         assert plugin.fetch_data().data["error"] == ""
 
     def test_fetch_reports_failure_by_raising(self, plugin, server):
-        server.status = (401, "Unauthorized")
-        with pytest.raises(Exception, match="401"):
-            plugin._fetch(server.url, KEY)
+        server.refuse(401, "Unauthorized")
+        with pytest.raises(urllib.error.HTTPError):
+            plugin._fetch(server.url, RETRIEVE, KEY, time.monotonic() + 4)
 
-    def test_server_with_another_key_refuses(self, plugin, server):
-        server.key = OTHER_KEY
-        assert_failed(plugin.fetch_data(), "401")
+    def test_fetch_past_its_deadline_raises_without_asking(self, plugin, server):
+        with pytest.raises(TimeoutError):
+            plugin._fetch(server.url, RETRIEVE, KEY, time.monotonic() - 1)
+        assert server.paths == []
 
-    def test_stale_timestamp_is_reported_as_such(self, plugin, server):
-        server.status = (400, "Stale Timestamp")
-        assert_failed(plugin.fetch_data(), "Stale Timestamp")
-
-    def test_response_sealed_with_another_key(self, plugin, server):
-        server.reply = lambda request: seal(
-            OTHER_KEY, json.dumps({"id": request["id"], "data": VALUES}).encode(), retriever.RESPONSE_CONTEXT
-        )
-        assert_failed(plugin.fetch_data(), "not encrypted with this key")
-
-    def test_request_reflected_as_the_response(self, plugin, server):
-        server.reply = lambda request: server.bodies[-1]
-        assert_failed(plugin.fetch_data(), "not encrypted with this key")
-
-    def test_plaintext_response(self, plugin, server):
-        server.reply = lambda request: json.dumps({"id": request["id"], "data": VALUES}).encode()
-        assert_failed(plugin.fetch_data(), "not encrypted with this key")
-
-    def test_empty_response(self, plugin, server):
-        server.reply = lambda request: b""
-        assert_failed(plugin.fetch_data(), "not encrypted with this key")
-
-    def test_response_to_another_request(self, plugin, server):
-        server.reply = lambda request: seal(
-            KEY, json.dumps({"id": "0" * 32, "data": VALUES}).encode(), retriever.RESPONSE_CONTEXT
-        )
-        assert_failed(plugin.fetch_data(), "does not answer this request")
-
-    def test_response_without_values(self, plugin, server):
-        server.reply = lambda request: seal(KEY, json.dumps({"id": request["id"]}).encode(), retriever.RESPONSE_CONTEXT)
-        assert_failed(plugin.fetch_data(), "no values")
-
-    def test_unreachable_server(self, plugin, server):
-        server.stop()
-        assert_failed(plugin.fetch_data())
+    def test_refused_retrieve_shows_the_defaults_and_the_reason(self, plugin, server):
+        plugin.fetch_data()
+        server.refuse(400, "Stale Timestamp", [RETRIEVE])
+        assert_retrieve_failed(plugin.fetch_data(), "400 Stale Timestamp")
 
     def test_failure_after_success_shows_no_reminders(self, plugin, server):
         assert plugin.fetch_data().data["reminders"]["data"]["count"] == 1
-        server.status = (500, "Internal Server Error")
-        assert_failed(plugin.fetch_data(), "500")
+        server.refuse(500, "Internal Server Error", [RETRIEVE])
+        assert_retrieve_failed(plugin.fetch_data(), "500 Internal Server Error")
 
     def test_recovers_after_failure(self, plugin, server):
-        server.status = (500, "Internal Server Error")
         plugin.fetch_data()
-        server.status = None
+        server.refuse(500, "Internal Server Error", [RETRIEVE])
+        plugin.fetch_data()
+        server.status = {}
         assert plugin.fetch_data().data == {**VALUES, "error": ""}
 
+    def test_unreachable_server_after_config(self, plugin, server):
+        plugin.fetch_data()
+        server.stop()
+        assert_retrieve_failed(plugin.fetch_data(), "Connection refused")
+
+    @pytest.mark.parametrize(
+        ("reply", "reason"),
+        [
+            (lambda s, path, request: s.sealed(path, {"id": request["id"], "seq": SEQ, "data": VALUES}, OTHER_KEY), "wrong key"),
+            (lambda s, path, request: s.sealed(CONFIG, {"id": request["id"], "seq": SEQ, "data": VALUES}), "wrong key"),
+            (lambda s, path, request: s.bodies[-1], "wrong key"),
+            (lambda s, path, request: json.dumps({"id": request["id"], "seq": SEQ, "data": VALUES}).encode(), "wrong key"),
+            (lambda s, path, request: b"", "wrong key"),
+            (lambda s, path, request: seal(KEY, b"not json", retriever.response_context(path)), "not JSON"),
+            (lambda s, path, request: s.sealed(path, {"id": "0" * 32, "seq": SEQ, "data": VALUES}), "wrong ID"),
+            (lambda s, path, request: s.sealed(path, {"id": request["id"], "data": VALUES}), "no seq"),
+            (lambda s, path, request: s.sealed(path, {"id": request["id"], "seq": True, "data": VALUES}), "no seq"),
+            (lambda s, path, request: s.sealed(path, {"id": request["id"], "seq": SEQ}), "no data"),
+        ],
+        ids=[
+            "sealed with another key",
+            "sealed for the other endpoint",
+            "request reflected",
+            "plaintext",
+            "empty",
+            "not json",
+            "another request's id",
+            "no seq",
+            "seq not a number",
+            "no data",
+        ],
+    )
+    def test_a_response_that_is_not_the_servers_answer(self, plugin, server, reply, reason):
+        plugin.fetch_data()
+        server.reply = lambda path, request: reply(server, path, request)
+        assert_retrieve_failed(plugin.fetch_data(), reason)
+
     def test_errors_never_contain_the_key(self, plugin, server, caplog):
-        server.status = (401, "Unauthorized")
+        server.refuse(401, "Unauthorized")
         first = plugin.fetch_data()
         server.stop()
         second = plugin.fetch_data()
         assert KEY_B64 not in first.error + second.error + caplog.text
+
+
+class TestServerConfig:
+    def test_config_is_read_once(self, plugin, server):
+        plugin.fetch_data()
+        plugin.fetch_data()
+        plugin.fetch_data()
+        assert server.paths == [CONFIG, RETRIEVE, RETRIEVE, RETRIEVE]
+
+    @pytest.mark.parametrize("new_seq", [SEQ + 1, SEQ - 1, 0])
+    def test_config_is_read_again_when_the_sequence_number_changes(self, plugin, server, new_seq):
+        plugin.fetch_data()
+        server.seq = new_seq
+        server.sources = {"reminders": {"type": "object", "default": {"count": -1}}}
+        result = plugin.fetch_data()
+        assert result.data == {**VALUES, "error": ""}
+        assert server.paths == [CONFIG, RETRIEVE, RETRIEVE, CONFIG]
+
+        plugin.fetch_data()
+        assert server.paths[4:] == [RETRIEVE]
+        server.refuse(500, "Internal Server Error", [RETRIEVE])
+        assert plugin.fetch_data().data["reminders"] == {"error": "", "data": {"count": -1}}
+
+    def test_config_is_read_again_when_settings_are_saved(self, plugin, server):
+        plugin.fetch_data()
+        plugin.config = {"server_url": server.url, "key": KEY_B64, "refresh_seconds": 120}
+        plugin.fetch_data()
+        assert server.paths == [CONFIG, RETRIEVE, CONFIG, RETRIEVE]
+
+    def test_defaults_come_from_the_servers_config(self, plugin, server):
+        server.sources = {
+            "reminders": {"type": "object", "default": {"count": 0, "text": "NONE"}},
+            "calendar": {"type": "array", "items": {"type": "string"}},
+        }
+        plugin.fetch_data()
+        server.refuse(500, "Internal Server Error", [RETRIEVE])
+        assert_failed(
+            plugin.fetch_data(),
+            "500 Internal Server Error",
+            {"reminders": {"error": "", "data": {"count": 0, "text": "NONE"}}, "calendar": {"error": "", "data": []}},
+        )
+
+    def test_no_source_is_known_before_the_config_is_read(self, plugin, server):
+        server.refuse(401, "Unauthorized")
+        assert_config_pending(plugin.fetch_data(), "401 Unauthorized")
+        assert server.paths == [CONFIG]
+
+    def test_unreachable_server_before_the_config_is_read(self, plugin, server):
+        server.stop()
+        assert_config_pending(plugin.fetch_data(), "Connection refused")
+
+    def test_config_is_tried_again_on_the_next_fetch(self, plugin, server):
+        server.refuse(500, "Internal Server Error", [CONFIG])
+        assert_config_pending(plugin.fetch_data(), "500 Internal Server Error")
+        server.status = {}
+        assert plugin.fetch_data().data == {**VALUES, "error": ""}
+        assert server.paths == [CONFIG, CONFIG, RETRIEVE]
+
+    def test_values_are_kept_when_the_changed_config_cannot_be_read(self, plugin, server):
+        plugin.fetch_data()
+        server.seq = SEQ + 1
+        server.refuse(500, "Internal Server Error", [CONFIG])
+        assert_config_pending(plugin.fetch_data(), "500 Internal Server Error", VALUES)
+
+        server.status = {}
+        assert plugin.fetch_data().data == {**VALUES, "error": ""}
+        assert server.paths == [CONFIG, RETRIEVE, RETRIEVE, CONFIG, RETRIEVE, CONFIG]
+
+    def test_a_config_response_cannot_be_passed_off_as_a_retrieve_response(self, plugin, server):
+        plugin.fetch_data()
+        server.reply = lambda path, request: server.sealed(CONFIG, {"id": request["id"], "seq": SEQ, "data": SOURCES})
+        assert_retrieve_failed(plugin.fetch_data(), "wrong key")
+
+    def test_all_requests_in_one_fetch_share_the_time_budget(self, plugin, server, monkeypatch):
+        monkeypatch.setattr(retriever, "TIMEOUT_SECONDS", 0.6)
+        server.delay = {CONFIG: 0.4, RETRIEVE: 0.4}
+        started = time.monotonic()
+        result = plugin.fetch_data()
+        assert time.monotonic() - started < 0.9
+        assert_retrieve_failed(result, "timed out")
+
+    def test_slow_config_before_the_config_is_read(self, plugin, server, monkeypatch):
+        monkeypatch.setattr(retriever, "TIMEOUT_SECONDS", 0.2)
+        server.delay = {CONFIG: 0.5}
+        assert_config_pending(plugin.fetch_data(), "timed out")
+
+
+class TestDescribe:
+    """Reasons are short, with what distinguishes them first."""
+
+    @pytest.mark.parametrize(
+        ("error", "reason"),
+        [
+            (urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None), "401 Unauthorized"),
+            (urllib.error.HTTPError("http://x", 400, "Stale Timestamp", None, None), "400 Stale Timestamp"),
+            (urllib.error.URLError(TimeoutError("timed out")), "timed out"),
+            (TimeoutError(), "timed out"),
+            (urllib.error.URLError(ConnectionRefusedError(61, "Connection refused")), "Connection refused"),
+            (urllib.error.URLError("unknown url type"), "<urlopen error unknown url type>"),
+            (ValueError("wrong ID in response"), "wrong ID in response"),
+            (KeyError(), "KeyError"),
+        ],
+    )
+    def test_reason(self, error, reason):
+        assert retriever.describe(error) == reason
+
+
+class TestDefaultFor:
+    @pytest.mark.parametrize(
+        ("schema", "value"),
+        [
+            ({"type": "object", "default": {"count": 0}}, {"count": 0}),
+            ({"type": "integer", "default": None}, None),
+            ({"type": "object", "properties": {"n": {"type": "integer"}, "s": {"type": "string"}}}, {"n": 0, "s": ""}),
+            ({"type": "object", "properties": {"n": {"type": "number", "default": 5}}}, {"n": 5}),
+            ({"type": "object"}, {}),
+            ({"type": "array", "items": {"type": "string"}}, []),
+            ({"type": "string"}, ""),
+            ({"type": "integer"}, 0),
+            ({"type": "number"}, 0),
+            ({"type": "boolean"}, False),
+            ({"type": "null"}, None),
+            ({}, None),
+            ("not a schema", None),
+        ],
+    )
+    def test_default(self, schema, value):
+        assert retriever.default_for(schema) == value
 
 
 class TestInterop:
@@ -243,20 +416,26 @@ class TestInterop:
 
     key = base64.b64decode(VECTORS["key"])
 
-    def test_opens_a_response_sealed_by_the_server(self):
-        vector = VECTORS["response_from_server"]
-        values = retriever.open_response(self.key, bytes.fromhex(vector["body"]), vector["id"])
-        assert values == vector["values"]
+    @pytest.mark.parametrize("path", [RETRIEVE, CONFIG])
+    def test_opens_a_response_sealed_by_the_server(self, path):
+        vector = VECTORS["responses_from_server"][path]
+        seq, data = retriever.open_response(self.key, bytes.fromhex(vector["body"]), vector["id"], path)
+        assert (seq, data) == (vector["seq"], vector["data"])
 
-    def test_request_vector_is_what_the_plugin_seals(self):
+    def test_the_servers_config_gives_reminders_a_default(self):
+        sources = VECTORS["responses_from_server"][CONFIG]["data"]
+        assert retriever.default_for(sources["reminders"]) == NO_REMINDERS["data"]
+
+    @pytest.mark.parametrize("path", [RETRIEVE, CONFIG])
+    def test_request_vector_is_what_the_plugin_seals(self, path):
         """The server's tests open this body; check here that it is still a current-format request."""
-        vector = VECTORS["request_from_plugin"]
+        vector = VECTORS["requests_from_plugin"][path]
         body = bytes.fromhex(vector["body"])
-        plaintext = ChaCha20Poly1305(self.key).decrypt(body[:12], body[12:], retriever.REQUEST_CONTEXT)
+        plaintext = ChaCha20Poly1305(self.key).decrypt(body[:12], body[12:], retriever.request_context(path))
         assert json.loads(plaintext) == {"ts": vector["ts"], "id": vector["id"]}
 
-        fresh, request_id = retriever.seal_request(self.key, vector["ts"])
-        plaintext = ChaCha20Poly1305(self.key).decrypt(fresh[:12], fresh[12:], retriever.REQUEST_CONTEXT)
+        fresh, request_id = retriever.seal_request(self.key, vector["ts"], path)
+        plaintext = ChaCha20Poly1305(self.key).decrypt(fresh[:12], fresh[12:], retriever.request_context(path))
         assert json.loads(plaintext) == {"ts": vector["ts"], "id": request_id}
 
 

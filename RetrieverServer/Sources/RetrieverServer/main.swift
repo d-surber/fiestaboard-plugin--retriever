@@ -92,7 +92,7 @@ func handle(_ conn: NWConnection) {
         guard let request, let key else { return respond(conn, "400 Bad Request") }
         log("\(conn.endpoint) \(request.line)")
         let parts = request.line.split(separator: " ")
-        guard parts.count >= 2, URLComponents(string: String(parts[1]))?.path == Wire.path else {
+        guard parts.count >= 2, let path = URLComponents(string: String(parts[1]))?.path, Wire.paths.contains(path) else {
             return respond(conn, "404 Not Found")
         }
         guard parts[0] == "POST" else {
@@ -100,7 +100,7 @@ func handle(_ conn: NWConnection) {
         }
         let id: String
         do {
-            id = try Wire.open(request: request.body, key: key)
+            id = try Wire.open(request: request.body, path: path, key: key)
         } catch Wire.Failure.stale {
             // Authentic but old or from a wrong clock. Said distinctly so that
             // clock skew is not mistaken for a wrong key.
@@ -110,6 +110,13 @@ func handle(_ conn: NWConnection) {
         } catch {
             return respond(conn, "401 Unauthorized")
         }
+        func send<Body: Codable>(_ data: Body) {
+            guard let body = try? Wire.seal(response: data, id: id, seq: Config.seq, path: path, key: key) else {
+                return respond(conn, "500 Internal Server Error")
+            }
+            respond(conn, "200 OK", body)
+        }
+        if path == Wire.configPath { return send(Config.sources) }
         fetchReminders { fetched in
             let items = fetched ?? []
             let text = items.prefix(ROWS)
@@ -118,12 +125,7 @@ func handle(_ conn: NWConnection) {
             let values = Values(reminders: Entry(
                 error: fetched == nil ? "Reminders could not be read" : "",
                 data: Payload(count: items.count, text: text, items: items)))
-            DispatchQueue.main.async {
-                guard let body = try? Wire.seal(response: values, id: id, key: key) else {
-                    return respond(conn, "500 Internal Server Error")
-                }
-                respond(conn, "200 OK", body)
-            }
+            DispatchQueue.main.async { send(values) }
         }
     }
 }
