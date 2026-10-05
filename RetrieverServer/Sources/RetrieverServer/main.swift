@@ -8,7 +8,6 @@ setvbuf(stdout, nil, _IOLBF, 0)   // flush log lines immediately under launchd
 let port: NWEndpoint.Port = 42511
 let WIDTH = 15   // board columns (Vestaboard Note)
 let ROWS = 3     // board rows (Vestaboard Note)
-let maxRequestBytes = 16384
 let key = Wire.key(base64: ProcessInfo.processInfo.environment["RETRIEVER_KEY"] ?? "")
 let store = EKEventStore()
 var activeListener: NWListener?
@@ -72,21 +71,15 @@ func respond(_ conn: NWConnection, _ status: String, _ body: Data = Data()) {
     log("-> \(status)")
 }
 
-// Reads until the headers and Content-Length bytes of body have arrived: a
-// request may come in more than one segment. Calls `done` with the request
-// line and the body, or with nil if the request is incomplete or too large.
+// Receives until HTTPRequest.parse has a whole request. Calls `done` with the
+// request line and the body, or with nil if no acceptable request arrived.
 func readRequest(_ conn: NWConnection, _ buffer: Data = Data(), _ done: @escaping ((line: String, body: Data)?) -> Void) {
-    if let headEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
-        let lines = String(decoding: buffer[..<headEnd.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
-        let length = lines.dropFirst()
-            .first { $0.lowercased().hasPrefix("content-length:") }
-            .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
-        guard length >= 0, length <= maxRequestBytes else { return done(nil) }
-        let body = buffer[headEnd.upperBound...]
-        if body.count >= length { return done((lines[0], Data(body.prefix(length)))) }
+    switch HTTPRequest.parse(buffer) {
+    case .complete(let line, let body): return done((line, body))
+    case .invalid: return done(nil)
+    case .incomplete: break
     }
-    guard buffer.count <= maxRequestBytes else { return done(nil) }
-    conn.receive(minimumIncompleteLength: 1, maximumLength: maxRequestBytes) { data, _, _, error in
+    conn.receive(minimumIncompleteLength: 1, maximumLength: HTTPRequest.maxBytes) { data, _, _, error in
         if let error { log("Receive error from \(conn.endpoint): \(error)"); return done(nil) }
         guard let data, !data.isEmpty else { return done(nil) }
         readRequest(conn, buffer + data, done)
