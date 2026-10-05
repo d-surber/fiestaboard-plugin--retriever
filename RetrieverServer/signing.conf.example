@@ -1,0 +1,4 @@
+# Copy to signing.conf (which is not committed) and name the code-signing
+# identity to sign the server with, as `security find-identity -p codesigning`
+# shows it. A self-signed certificate or a Developer ID both work.
+IDENTITY="Retriever Signing"

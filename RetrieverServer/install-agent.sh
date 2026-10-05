@@ -3,11 +3,25 @@
 set -euo pipefail
 
 LABEL="local.retriever-server"
-BIN="$(cd "$(dirname "$0")" && pwd)/.build/release/RetrieverServer"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+BIN="$HERE/.build/release/RetrieverServer"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="$HOME/Library/Logs/RetrieverServer.log"
 
 [ -x "$BIN" ] || { echo "Binary not found. Run: swift build -c release"; exit 1; }
+
+# Sign the server with the identity named in signing.conf, if there is one.
+# The identity can be a self-signed certificate or a Developer ID: only its
+# name is given here. Without signing.conf the build's ad-hoc signature
+# stays, and macOS treats every rebuild as a different program.
+IDENTITY=""
+[ -f "$HERE/signing.conf" ] && . "$HERE/signing.conf"
+if [ -n "$IDENTITY" ]; then
+    codesign --force --sign "$IDENTITY" --identifier "$LABEL" "$BIN"
+    echo "Signed with \"$IDENTITY\"."
+else
+    echo "No signing.conf: leaving the ad-hoc signature."
+fi
 
 read -rsp "Key (base64 of 32 bytes; leave empty to generate one): " KEY; echo
 if [ -z "$KEY" ]; then
