@@ -91,4 +91,14 @@ guard key != nil else {
 
 log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(config.seq)")
 startListener()
+
+// Ask every source once now. A source's first fetch can be slow or put a
+// permission question to the user, and that should not fall on the first
+// request.
+retrieve(from: sources, timeout: sourceTimeout) { entries in
+    for (name, entry) in entries.sorted(by: { $0.key < $1.key }) where !entry.error.isEmpty {
+        log("\(name) at startup: \(entry.error)")
+    }
+}
+
 dispatchMain()
