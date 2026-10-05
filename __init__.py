@@ -1,30 +1,29 @@
 """
-Template Plugin for FiestaBoard.
+Retriever plugin for FiestaBoard.
 
-This is a template/example plugin that demonstrates the plugin structure.
-Copy this directory to create a new plugin.
-
-Rename the directory to match your plugin ID (from manifest.json).
+Fetches data from a companion server and exposes it to templates.
 """
 
+import json
 import logging
-import os
+import urllib.parse
+import urllib.request
 from typing import Any
 
 from src.plugins.base import PluginBase, PluginResult
 
-# Uncomment when adding event-based triggers (see check_triggers stub below):
-# from src.plugins.base import TriggerResult
-
 logger = logging.getLogger(__name__)
+
+# FiestaBoard abandons a fetch that takes longer than 5 s, and quarantines a
+# plugin after three such fetches in a row. Stay inside that.
+TIMEOUT_SECONDS = 4
+
+# What the reminders endpoint returns when nothing is due.
+NO_REMINDERS: dict[str, Any] = {"count": 0, "text": "", "items": []}
 
 
 class RetrieverPlugin(PluginBase):
-    """Template plugin implementation.
-
-    This class demonstrates how to create a FiestaBoard plugin.
-    Rename this class to match your plugin.
-    """
+    """Retriever plugin implementation."""
 
     @property
     def plugin_id(self) -> str:
@@ -33,51 +32,46 @@ class RetrieverPlugin(PluginBase):
 
     def fetch_data(self) -> PluginResult:
         """
-        Fetch data from your data source.
+        Assign the template variables from one fetch. Never raises.
 
-        This method is called by the display service to get data for
-        templates and displays.
+        _fetch tells the truth about the fetch; what the variables become
+        when it fails is decided here: ``reminders`` is empty, because
+        nothing is known, and ``error`` says why.
 
         Returns:
             PluginResult with:
-            - available: True if data was fetched successfully
-            - data: Dictionary of template variables
-            - formatted: Optional pre-formatted display string
-            - error: Error message if fetch failed
+            - available: False only if the plugin is not configured
+            - data: {"reminders": <server response, unchanged>, "error": ""}
+              or, after a failed fetch,
+              {"reminders": <no reminders>, "error": <reason>}
+            - error: The same reason, for FiestaBoard itself
         """
-        # Get configuration
-        api_key = self.config.get("api_key")
+        errors = self.validate_config(self.config)
+        if errors:
+            return PluginResult(available=False, error="; ".join(errors))
 
-        # Can also check environment variable
-        if not api_key:
-            api_key = os.getenv("RETRIEVER_API_KEY")
-
-        if not api_key:
-            return PluginResult(available=False, error="API key not configured")
+        endpoint = self.config["server_url"].strip().rstrip("/") + "/reminders"
 
         try:
-            # TODO: Implement your data fetching logic here
-            # Example:
-            # response = requests.get("https://api.example.com/data", headers={"Authorization": api_key})
-            # data = response.json()
-
-            # For this template, return example data
-            example_data = {
-                "value": "123",
-                "status": "OK",
-                "formatted": "Value: 123",
-                "item_count": 2,
-                "items": [
-                    {"name": "Item 1", "value": "100", "status": "Active"},
-                    {"name": "Item 2", "value": "200", "status": "Pending"},
-                ],
-            }
-
-            return PluginResult(available=True, data=example_data, formatted_lines=self._format_display(example_data))
-
+            reminders = self._fetch(endpoint, self.config["token"])
         except Exception as e:
-            logger.error(f"Error fetching data: {e}", exc_info=True)
-            return PluginResult(available=False, error=str(e))
+            # Log the endpoint, never the full URL: that carries the token.
+            logger.warning(f"Fetch from {endpoint} failed: {e}")
+            return PluginResult(available=True, data={"reminders": NO_REMINDERS, "error": str(e)}, error=str(e))
+
+        return PluginResult(available=True, data={"reminders": reminders, "error": ""})
+
+    def _fetch(self, endpoint: str, token: str) -> Any:
+        """
+        Retrieve one endpoint's JSON from the server.
+
+        The only place that talks to the server. Raises on any failure,
+        including a non-2xx status.
+        """
+        url = f"{endpoint}?{urllib.parse.urlencode({'token': token})}"
+        # The scheme is restricted to http(s) by validate_config.
+        with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310
+            return json.load(response)
 
     def validate_config(self, config: dict[str, Any]) -> list[str]:
         """
@@ -95,37 +89,16 @@ class RetrieverPlugin(PluginBase):
         """
         errors = []
 
-        # Example validation
-        if not config.get("api_key"):
-            # API key is required per settings_schema
-            errors.append("API key is required")
+        server_url = config.get("server_url")
+        if not isinstance(server_url, str) or not server_url.strip():
+            errors.append("Server URL is required")
+        elif not server_url.strip().lower().startswith(("http://", "https://")):
+            errors.append("Server URL must start with http:// or https://")
+
+        if not config.get("token"):
+            errors.append("Token is required")
 
         return errors
-
-    def _format_display(self, data: dict[str, Any]) -> list[str]:
-        """
-        Format data for display on the board.
-
-        Args:
-            data: The fetched data
-
-        Returns:
-            List of display lines (max 22 chars per line, up to 6 lines)
-        """
-        lines: list[str] = []
-        lines.append(f"Status: {data.get('status', 'N/A')}")
-        lines.append(f"Value: {data.get('value', 'N/A')}")
-
-        items = data.get("items", [])
-        if items:
-            lines.append(f"Items: {len(items)}")
-            for item in items[:2]:
-                lines.append(f"  {item['name']}: {item['value']}")
-
-        while len(lines) < 6:
-            lines.append("")
-
-        return lines[:6]
 
     def cleanup(self) -> None:
         """
@@ -134,32 +107,3 @@ class RetrieverPlugin(PluginBase):
         Override this to clean up any resources (close connections, etc.)
         """
         logger.info(f"Plugin {self.plugin_id} cleanup")
-
-    # ------------------------------------------------------------------
-    # Optional: event-based triggers
-    # ------------------------------------------------------------------
-    # Uncomment and adapt the block below if your plugin needs to push a
-    # specific page to the board in response to an event (doorbell ring,
-    # weather alert, threshold crossed, etc.). You must also set
-    # `"supports_triggers": true` in manifest.json — without that flag
-    # this method is never called.
-    #
-    # Full docs: docs/internal/development/PLUGIN_DEVELOPMENT.md
-    # ("Triggering Pages from a Plugin")
-    #
-    # def check_triggers(self) -> list["TriggerResult"]:
-    #     """Return a list of TriggerResult; entries with triggered=True activate."""
-    #     event = self._pending_event()  # your own state
-    #     if event is None:
-    #         return []
-    #     return [
-    #         TriggerResult(
-    #             triggered=True,
-    #             trigger_id=f"retriever_event_{event.id}",  # stable per event
-    #             priority=50,                                # higher = more important
-    #             duration_seconds=30,                        # auto-expires after this
-    #             data={"label": event.label},                # → {{retriever.label}}
-    #             message="Event fired",                      # fallback when no
-    #                                                         # trigger_page_id is set
-    #         )
-    #     ]

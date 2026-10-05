@@ -14,10 +14,15 @@
   "settings_schema": {
     "type": "object",
     "properties": {
-      "api_key": {
+      "server_url": {
         "type": "string",
-        "title": "API Key",
-        "description": "Your API key for the service.",
+        "title": "Server URL",
+        "description": "Base URL of the Retriever server, e.g. http://192.0.2.10:42511. Use an IP address if the name does not resolve."
+      },
+      "token": {
+        "type": "string",
+        "title": "Token",
+        "description": "Shared token configured on the server.",
         "ui:widget": "password"
       },
       "refresh_seconds": {
@@ -33,60 +38,7 @@
         "default": false
       }
     },
-    "required": ["api_key"]
-  },
-  "env_vars": [
-    {
-      "name": "RETRIEVER_API_KEY",
-      "required": false,
-      "description": "API key (can also be set in UI)"
-    }
-  ],
-  "variables": {
-    "groups": {
-      "main": { "label": "Main Data" },
-      "display": { "label": "Display" }
-    },
-    "simple": {
-      "value": {
-        "description": "The primary data value",
-        "type": "number",
-        "max_length": 10,
-        "group": "main",
-        "example": "123"
-      },
-      "status": {
-        "description": "Current status text",
-        "type": "string",
-        "max_length": 15,
-        "group": "main",
-        "example": "OK"
-      },
-      "formatted": {
-        "description": "Pre-formatted display string",
-        "type": "string",
-        "max_length": 22,
-        "group": "display",
-        "example": "Value: 123"
-      }
-    },
-    "arrays": {
-      "items": {
-        "label_field": "name",
-        "item_fields": ["name", "value", "status"]
-      }
-    }
-  },
-  "max_lengths": {
-    "items.*.name": 10,
-    "items.*.value": 8,
-    "items.*.status": 12
-  },
-  "color_rules_schema": {
-    "status": {
-      "type": "threshold",
-      "description": "Color based on status value"
-    }
+    "required": ["server_url", "token"]
   },
 
   "demo": {
@@ -94,11 +46,11 @@
     "device_type": "flagship",
     "template": [
       "",
-      "{{retriever.status}}",
-      "Value: {{retriever.value}}",
-      "{{retriever.formatted}}",
+      "Reminders: {{retriever.reminders.count}}",
+      "{{retriever.reminders.items.0.title}}",
+      "{{retriever.reminders.items.1.title}}",
       "",
-      ""
+      "{{retriever.error}}"
     ],
     "line_metadata": [
       {"alignment": "center", "wrap": false},
