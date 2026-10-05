@@ -9,18 +9,19 @@ import RetrieverSourceKit
 /// check is not connected to, and so cannot serve anything.
 final class RemoteSource: Source {
     let service: String
+    let cdhash: String?
     let name: String
     let schema: JSON
 
-    /// Makes a connection to a service. Replaced in tests.
-    typealias Connect = (_ service: String) throws -> NSXPCConnection
+    /// Makes a connection to a service, optionally pinned to one build. Replaced in tests.
+    typealias Connect = (_ service: String, _ cdhash: String?) throws -> NSXPCConnection
 
     private let connect: Connect
 
     /// A connection to the module registered as `service`, held to the signature requirement.
-    static let signedConnection: Connect = { service in
+    static let signedConnection: Connect = { service, cdhash in
         let connection = NSXPCConnection(machServiceName: service)
-        connection.setCodeSigningRequirement(try Signer.requirement(identifier: service))
+        connection.setCodeSigningRequirement(try Signer.requirement(identifier: service, cdhash: cdhash))
         return connection
     }
 
@@ -37,10 +38,12 @@ final class RemoteSource: Source {
     }
 
     /// Asks the module what it is. Blocks for up to `timeout`.
-    init(service: String, timeout: TimeInterval = 3, connect: @escaping Connect = RemoteSource.signedConnection) throws {
+    init(service: String, cdhash: String? = nil, timeout: TimeInterval = 3,
+         connect: @escaping Connect = RemoteSource.signedConnection) throws {
         self.service = service
+        self.cdhash = cdhash
         self.connect = connect
-        let answer = Self.call(service, connect, timeout: timeout) { $0.describe(reply: $1) }
+        let answer = Self.call(service, cdhash, connect, timeout: timeout) { $0.describe(reply: $1) }
         guard case .success(let data) = answer, let description = try? JSONDecoder().decode(SourceDescription.self, from: data) else {
             if case .failure(let failure) = answer { throw failure }
             throw Failure.unavailable("its description could not be read")
@@ -52,7 +55,7 @@ final class RemoteSource: Source {
 
     func fetch(_ done: @escaping (Entry) -> Void) {
         DispatchQueue.global().async {
-            switch Self.call(self.service, self.connect, timeout: 3, { $0.fetch(reply: $1) }) {
+            switch Self.call(self.service, self.cdhash, self.connect, timeout: 3, { $0.fetch(reply: $1) }) {
             case .success(let data):
                 done((try? JSONDecoder().decode(Entry.self, from: data)) ?? self.failed("module's answer could not be read"))
             case .failure(let failure):
@@ -64,10 +67,10 @@ final class RemoteSource: Source {
 
     /// One question to a module on a connection of its own. Returns the
     /// answer, or why there was none.
-    private static func call(_ service: String, _ connect: Connect, timeout: TimeInterval,
+    private static func call(_ service: String, _ cdhash: String?, _ connect: Connect, timeout: TimeInterval,
                              _ ask: (SourceService, @escaping (Data) -> Void) -> Void) -> Result<Data, Failure> {
         let connection: NSXPCConnection
-        do { connection = try connect(service) } catch { return .failure(.unavailable("\(error)")) }
+        do { connection = try connect(service, cdhash) } catch { return .failure(.unavailable("\(error)")) }
         connection.remoteObjectInterface = NSXPCInterface(with: SourceService.self)
         connection.resume()
         defer { connection.invalidate() }

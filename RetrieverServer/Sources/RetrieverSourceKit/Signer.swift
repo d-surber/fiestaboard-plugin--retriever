@@ -22,9 +22,15 @@ public enum Signer {
         public var description: String { "this program is not signed with an identity" }
     }
 
-    /// The requirement "signed by my signer, with this identifier".
-    public static func requirement(identifier: String) throws -> String {
-        "identifier \"\(identifier)\" and \(try sameSigner())"
+    /// The requirement "signed by my signer, with this identifier", and
+    /// optionally "and is exactly the build with this code hash".
+    public static func requirement(identifier: String, cdhash: String? = nil) throws -> String {
+        requirement(identifier: identifier, cdhash: cdhash, signer: try sameSigner())
+    }
+
+    static func requirement(identifier: String, cdhash: String?, signer: String) -> String {
+        let build = cdhash.map { " and cdhash H\"\($0.lowercased())\"" } ?? ""
+        return "identifier \"\(identifier)\" and \(signer)\(build)"
     }
 
     /// The part of a requirement that says "signed by whoever signed me".

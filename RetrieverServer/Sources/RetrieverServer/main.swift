@@ -9,29 +9,15 @@ let port: NWEndpoint.Port = 42511
 let key = Wire.key(base64: ProcessInfo.processInfo.environment["RETRIEVER_KEY"] ?? "")
 
 
-// `RetrieverServer status` reports on the modules and exits, serving nothing.
-if CommandLine.arguments.dropFirst().first == "status" {
-    for service in moduleServices {
-        do {
-            let module = try RemoteSource(service: service)
-            let answered = DispatchSemaphore(value: 0)
-            module.fetch { entry in
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-                let data = (try? encoder.encode(entry.data)).map { String(decoding: $0, as: UTF8.self) } ?? "?"
-                print("\(service): ok; source \"\(module.name)\"; error \"\(entry.error)\"; data \(data)")
-                answered.signal()
-            }
-            answered.wait()
-        } catch {
-            print("\(service): \(error)")
-        }
-    }
-    exit(0)
-}
+// Commands that serve nothing and exit: see ConfigCommand.
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments.first == "config" { ConfigCommand.run(Array(arguments.dropFirst())) }
+if arguments.first == "status" { ConfigCommand.status() }
 
-let sources = allSources + connectModules()
-let config = Config(sources: sources)
+// What is served: the built-in sources, and the modules a valid, signed,
+// unexpired module config lists.
+let state = ServerState(builtIn: allSources, directory: ConfigStore.installed,
+                        builtInKey: ConfigStore.builtInKey(), connect: connectModules)
 let serverInfo = ServerInfo.current(port: port.rawValue)
 let sourceTimeout: TimeInterval = 3   // the plugin gives a whole fetch 4 s
 var activeListener: NWListener?
@@ -85,14 +71,14 @@ func handle(_ conn: NWConnection) {
             return respond(conn, status)
         }
         func send<Body: Codable>(_ data: Body) {
-            guard let body = try? Wire.seal(response: data, id: id, seq: config.seq, path: path, key: key) else {
+            guard let body = try? Wire.seal(response: data, id: id, seq: state.config.seq, path: path, key: key) else {
                 return respond(conn, "500 Internal Server Error")
             }
             respond(conn, "200 OK", body)
         }
         if path == Wire.serverPath { return send(serverInfo) }
-        if path == Wire.configPath { return send(config.schemas) }
-        retrieve(from: sources, timeout: sourceTimeout) { send($0) }
+        if path == Wire.configPath { return send(state.config.schemas) }
+        retrieve(from: state.sources, timeout: sourceTimeout) { send($0) }
     }
 }
 
@@ -116,14 +102,21 @@ guard key != nil else {
     exit(1)
 }
 
-log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(config.seq)")
+state.refresh()
 startListener()
+
+// Look at the module config again every minute: a newly installed one is
+// picked up, and an expired one is dropped, without a restart.
+let configTimer = DispatchSource.makeTimerSource(queue: .main)
+configTimer.schedule(deadline: .now() + 60, repeating: 60)
+configTimer.setEventHandler { state.refresh() }
+configTimer.resume()
 
 // Ask every source once now. A source's first fetch may put a permission
 // question to the user, as Reminders does after each rebuild, and reports
 // "timed out" until it is answered. Better that the question appears at
 // startup than on the first request.
-retrieve(from: sources, timeout: sourceTimeout) { entries in
+retrieve(from: state.sources, timeout: sourceTimeout) { entries in
     for (name, entry) in entries.sorted(by: { $0.key < $1.key }) where !entry.error.isEmpty {
         log("\(name) at startup: \(entry.error)")
     }

@@ -18,7 +18,7 @@ private final class TestModule {
         listener.resume()
     }
 
-    var connect: RemoteSource.Connect { { [listener] _ in NSXPCConnection(listenerEndpoint: listener.endpoint) } }
+    var connect: RemoteSource.Connect { { [listener] _, _ in NSXPCConnection(listenerEndpoint: listener.endpoint) } }
 
     deinit { listener.invalidate() }
 }
@@ -47,7 +47,7 @@ private func fetched(_ source: Source) async -> Entry {
 @Test func aModuleThatCannotBeConnectedToIsLeftOut() {
     struct Refused: Error {}
     #expect(throws: RemoteSource.Failure.self) {
-        try RemoteSource(service: Signer.moduleIdentifier(for: "numbers"), connect: { _ in throw Refused() })
+        try RemoteSource(service: Signer.moduleIdentifier(for: "numbers"), connect: { _, _ in throw Refused() })
     }
 }
 
@@ -79,7 +79,7 @@ private func fetched(_ source: Source) async -> Entry {
     let started = Date()
     #expect(throws: RemoteSource.Failure.self) {
         try RemoteSource(service: Signer.moduleIdentifier(for: "numbers"), timeout: 0.3,
-                         connect: { _ in NSXPCConnection(listenerEndpoint: listener.endpoint) })
+                         connect: { _, _ in NSXPCConnection(listenerEndpoint: listener.endpoint) })
     }
     #expect(Date().timeIntervalSince(started) < 2)
     listener.invalidate()
