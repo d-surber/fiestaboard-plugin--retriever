@@ -9,8 +9,12 @@ LOG="$HOME/Library/Logs/RetrieverServer.log"
 
 [ -x "$BIN" ] || { echo "Binary not found. Run: swift build -c release"; exit 1; }
 
-read -rsp "Token (letters and digits only): " TOKEN; echo
-[[ "$TOKEN" =~ ^[A-Za-z0-9]+$ ]] || { echo "Token must be letters and digits only."; exit 1; }
+read -rsp "Key (base64 of 32 bytes; leave empty to generate one): " KEY; echo
+if [ -z "$KEY" ]; then
+    KEY=$(openssl rand -base64 32)
+    echo "Generated key. Enter it in the plugin's settings: $KEY"
+fi
+[[ "$KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo "Key must be base64 of 32 bytes."; exit 1; }
 
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<EOF
@@ -26,8 +30,8 @@ cat > "$PLIST" <<EOF
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>REMINDERS_TOKEN</key>
-        <string>$TOKEN</string>
+        <key>RETRIEVER_KEY</key>
+        <string>$KEY</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -40,7 +44,7 @@ cat > "$PLIST" <<EOF
 </dict>
 </plist>
 EOF
-chmod 600 "$PLIST"   # the token is stored in this file
+chmod 600 "$PLIST"   # the key is stored in this file
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"

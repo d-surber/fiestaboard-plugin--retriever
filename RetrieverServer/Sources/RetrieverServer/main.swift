@@ -1,3 +1,4 @@
+import CryptoKit
 import EventKit
 import Foundation
 import Network
@@ -7,7 +8,8 @@ setvbuf(stdout, nil, _IOLBF, 0)   // flush log lines immediately under launchd
 let port: NWEndpoint.Port = 42511
 let WIDTH = 15   // board columns (Vestaboard Note)
 let ROWS = 3     // board rows (Vestaboard Note)
-let token = ProcessInfo.processInfo.environment["REMINDERS_TOKEN"] ?? ""
+let maxRequestBytes = 16384
+let key = Wire.key(base64: ProcessInfo.processInfo.environment["RETRIEVER_KEY"] ?? "")
 let store = EKEventStore()
 var activeListener: NWListener?
 
@@ -25,9 +27,22 @@ struct Payload: Codable {
     let items: [Item]
 }
 
+// One served value. `error` reports a problem getting this value in
+// particular and is empty when there was none.
+struct Entry<Value: Codable>: Codable {
+    let error: String
+    let data: Value
+}
+
+// Everything the server serves, keyed by name.
+struct Values: Codable {
+    let reminders: Entry<Payload>
+}
+
 func log(_ s: String) { print("\(ISO8601DateFormatter().string(from: Date())) \(s)") }
 
-func fetchReminders(_ done: @escaping ([Item]) -> Void) {
+// Calls `done` with nil if Reminders could not be read.
+func fetchReminders(_ done: @escaping ([Item]?) -> Void) {
     let cal = Calendar.current
     store.refreshSourcesIfNecessary()
     // Fetch all incomplete reminders and filter locally: EventKit's date-range
@@ -35,7 +50,10 @@ func fetchReminders(_ done: @escaping ([Item]) -> Void) {
     // is one EKReminder whose due date is its next incomplete occurrence.
     let pred = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
     store.fetchReminders(matching: pred) { reminders in
-        let all = reminders ?? []
+        guard let all = reminders else {
+            log("Reminders could not be read")
+            return done(nil)
+        }
         let items = all.compactMap { r -> Item? in
             guard let comps = r.dueDateComponents,
                   let due = cal.date(from: comps),
@@ -47,40 +65,72 @@ func fetchReminders(_ done: @escaping ([Item]) -> Void) {
     }
 }
 
-func respond(_ conn: NWConnection, _ status: String, _ body: Data) {
-    let head = "HTTP/1.1 \(status)\r\nContent-Type: application/json\r\n" +
+func respond(_ conn: NWConnection, _ status: String, _ body: Data = Data()) {
+    let head = "HTTP/1.1 \(status)\r\nContent-Type: application/octet-stream\r\n" +
                "Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
     conn.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in conn.cancel() })
     log("-> \(status)")
 }
 
+// Reads until the headers and Content-Length bytes of body have arrived: a
+// request may come in more than one segment. Calls `done` with the request
+// line and the body, or with nil if the request is incomplete or too large.
+func readRequest(_ conn: NWConnection, _ buffer: Data = Data(), _ done: @escaping ((line: String, body: Data)?) -> Void) {
+    if let headEnd = buffer.range(of: Data("\r\n\r\n".utf8)) {
+        let lines = String(decoding: buffer[..<headEnd.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
+        let length = lines.dropFirst()
+            .first { $0.lowercased().hasPrefix("content-length:") }
+            .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
+        guard length >= 0, length <= maxRequestBytes else { return done(nil) }
+        let body = buffer[headEnd.upperBound...]
+        if body.count >= length { return done((lines[0], Data(body.prefix(length)))) }
+    }
+    guard buffer.count <= maxRequestBytes else { return done(nil) }
+    conn.receive(minimumIncompleteLength: 1, maximumLength: maxRequestBytes) { data, _, _, error in
+        if let error { log("Receive error from \(conn.endpoint): \(error)"); return done(nil) }
+        guard let data, !data.isEmpty else { return done(nil) }
+        readRequest(conn, buffer + data, done)
+    }
+}
+
 func handle(_ conn: NWConnection) {
     conn.start(queue: .main)
-    conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, error in
-        if let error { log("Receive error from \(conn.endpoint): \(error)"); conn.cancel(); return }
-        let request = String(decoding: data ?? Data(), as: UTF8.self)
-        let firstLine = String(request.split(separator: "\r\n").first ?? "")
-        log("\(conn.endpoint) \(firstLine.replacingOccurrences(of: token, with: "***"))")
-        let parts = firstLine.split(separator: " ")
-        guard parts.count >= 2, parts[0] == "GET" else {
-            return respond(conn, "405 Method Not Allowed", Data("{}".utf8))
+    readRequest(conn) { request in
+        guard let request, let key else { return respond(conn, "400 Bad Request") }
+        log("\(conn.endpoint) \(request.line)")
+        let parts = request.line.split(separator: " ")
+        guard parts.count >= 2, URLComponents(string: String(parts[1]))?.path == Wire.path else {
+            return respond(conn, "404 Not Found")
         }
-        guard let url = URLComponents(string: String(parts[1])), url.path == "/reminders" else {
-            return respond(conn, "404 Not Found", Data("{}".utf8))
+        guard parts[0] == "POST" else {
+            return respond(conn, "405 Method Not Allowed")
         }
-        let given = url.queryItems?.first { $0.name == "token" }?.value ?? ""
-        guard !token.isEmpty, given == token else {
-            return respond(conn, "401 Unauthorized", Data("{}".utf8))
+        let id: String
+        do {
+            id = try Wire.open(request: request.body, key: key)
+        } catch Wire.Failure.stale {
+            // Authentic but old or from a wrong clock. Said distinctly so that
+            // clock skew is not mistaken for a wrong key.
+            return respond(conn, "400 Stale Timestamp")
+        } catch Wire.Failure.malformed {
+            return respond(conn, "400 Bad Request")
+        } catch {
+            return respond(conn, "401 Unauthorized")
         }
-        fetchReminders { items in
+        fetchReminders { fetched in
+            let items = fetched ?? []
             let text = items.prefix(ROWS)
                 .map { String($0.title.uppercased().prefix(WIDTH)) }
                 .joined(separator: "\n")
-            let payload = Payload(count: items.count, text: text, items: items)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            let body = (try? encoder.encode(payload)) ?? Data("{}".utf8)
-            DispatchQueue.main.async { respond(conn, "200 OK", body) }
+            let values = Values(reminders: Entry(
+                error: fetched == nil ? "Reminders could not be read" : "",
+                data: Payload(count: items.count, text: text, items: items)))
+            DispatchQueue.main.async {
+                guard let body = try? Wire.seal(response: values, id: id, key: key) else {
+                    return respond(conn, "500 Internal Server Error")
+                }
+                respond(conn, "200 OK", body)
+            }
         }
     }
 }
@@ -100,8 +150,8 @@ func startListener() {
     }
 }
 
-guard !token.isEmpty else {
-    log("Set REMINDERS_TOKEN before starting.")
+guard key != nil else {
+    log("Set RETRIEVER_KEY (base64 of 32 random bytes) before starting.")
     exit(1)
 }
 

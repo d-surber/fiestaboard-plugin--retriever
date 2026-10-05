@@ -16,6 +16,7 @@ let package = Package(
                     "-Xlinker", "\(Context.packageDirectory)/Info.plist",
                 ])
             ]
-        )
+        ),
+        .testTarget(name: "RetrieverServerTests", dependencies: ["RetrieverServer"]),
     ]
 )

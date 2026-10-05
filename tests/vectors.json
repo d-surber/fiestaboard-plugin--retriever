@@ -1,0 +1,30 @@
+{
+  "_comment": "Messages sealed by each side for the other to open. The key is a test key: bytes 0 to 31. Read by tests/test_plugin.py and by RetrieverServer's tests.",
+  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "request_from_plugin": {
+    "ts": 1800000000,
+    "id": "2d7da40b194c93add118165d8c2720c6",
+    "body": "267069059652801dcba4c8961c49afe36955e816bf935138ff3f10fb82738c5fde0dadb0c03f1149688c2da0e3dd136d46725d6586748883953138625801bec529665011d7947b44ba5cb311bba9cf924c1557bb88bb4764"
+  },
+  "response_from_server": {
+    "id": "00112233445566778899aabbccddeeff",
+    "body": "f628d637c52e7261cd4c263017f2751f32bcc8e9d4ce55263720eb52d883e41e64d7e3f29a6c4cf8ef0b16ab09df6a0f86a0f43e90e8f2780f16de756c0e617521010cb1ed893fb32af28b548f3157e1ed2c275267ed4e3ab0278f3387d2a8804fcb112d1acb128bef856fa88de5f65e1bae661099b898a560e18a88eb7489af7d8794376805b33e386e444c036a957133322cf3c9d44fa1d562b54e91e4d334883ab9d365fb987031ba39fad5d79b2662da0e03c808a3244f7b5d4b8103a365b94637b13403146032bb6539c80399d36ee6a2f28bd43e91dc8d1a71df68b8afa781",
+    "values": {
+      "reminders": {
+        "data": {
+          "text": "TEST0",
+          "count": 1,
+          "items": [
+            {
+              "due": "2027-01-15T08:15:00Z",
+              "priority": 0,
+              "list": "Reminders",
+              "title": "test0"
+            }
+          ]
+        },
+        "error": ""
+      }
+    }
+  }
+}
