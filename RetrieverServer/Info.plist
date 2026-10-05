@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>local.retriever-server</string>
+    <key>CFBundleName</key>
+    <string>RetrieverServer</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Serves incomplete reminders to FiestaBoard.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Serves incomplete reminders to FiestaBoard.</string>
+</dict>
+</plist>
