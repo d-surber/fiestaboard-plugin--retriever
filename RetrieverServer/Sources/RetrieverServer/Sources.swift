@@ -2,8 +2,10 @@ import RetrieverSourceKit
 
 // The sources this server serves. The core knows nothing else about them.
 
-/// Sources that still run inside the server.
-let allSources: [Source] = [RemindersSource(), MusicSource()]
+/// Sources that run inside the server. There are none: every source is a
+/// module, a separate signed program with its own permissions. (The server
+/// itself adds one of its own, the module config's state.)
+let builtInSources: [Source] = []
 
 /// Reaches the source modules a module config lists: separate signed
 /// programs, each named by its signing identifier, which is also its XPC

@@ -2,7 +2,25 @@
 import Foundation
 import PackageDescription
 
-// Embedded in the server so macOS accepts its permission requests.
+/// Linker flags that embed a file in a program as a section of `__TEXT`.
+func embedding(_ sections: [String: String]) -> LinkerSetting {
+    .unsafeFlags(sections.sorted { $0.key < $1.key }.flatMap { section, file in
+        ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", section,
+         "-Xlinker", "\(Context.packageDirectory)/\(file)"]
+    })
+}
+
+/// A source module: one separately signed program per source. Its Info.plist
+/// is embedded so macOS has a name and a reason to show when the module asks
+/// for the permission its source needs; a module that needs none has no file.
+func module(_ name: String, infoPlist: Bool = false) -> Target {
+    .executableTarget(
+        name: name,
+        dependencies: ["RetrieverSourceKit"],
+        exclude: infoPlist ? ["Info.plist"] : [],
+        linkerSettings: infoPlist ? [embedding(["__info_plist": "Sources/\(name)/Info.plist"])] : [])
+}
+
 var serverSections = ["__info_plist": "Info.plist"]
 
 // Optional: a config key built into the server. If config-key.pub (a PEM
@@ -22,17 +40,14 @@ let package = Package(
         .executableTarget(
             name: "RetrieverServer",
             dependencies: ["RetrieverSourceKit"],
-            linkerSettings: [
-                .unsafeFlags(serverSections.sorted { $0.key < $1.key }.flatMap { section, file in
-                    ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", section,
-                     "-Xlinker", "\(Context.packageDirectory)/\(file)"]
-                })
-            ]
+            linkerSettings: [embedding(serverSections)]
         ),
-        // Source modules: one separately signed program per source.
-        .executableTarget(name: "RetrieverSourceOS", dependencies: ["RetrieverSourceKit"]),
+        module("RetrieverSourceOS"),
+        module("RetrieverSourceReminders", infoPlist: true),
+        module("RetrieverSourceMusic", infoPlist: true),
         .testTarget(
             name: "RetrieverServerTests",
-            dependencies: ["RetrieverServer", "RetrieverSourceKit", "RetrieverSourceOS"]),
+            dependencies: ["RetrieverServer", "RetrieverSourceKit", "RetrieverSourceOS",
+                           "RetrieverSourceReminders", "RetrieverSourceMusic"]),
     ]
 )

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RetrieverServer
+@testable import RetrieverSourceMusic
 @testable import RetrieverSourceKit
 
 private let playing = MusicSource.Payload(state: "playing", title: "So What", artist: "Miles Davis", album: "Kind of Blue")
@@ -29,4 +29,8 @@ private let playing = MusicSource.Payload(state: "playing", title: "So What", ar
     #expect(source.entry(status: 15, terminated: true, output: Data(), errors: "") == source.failed("Music did not answer"))
     #expect(source.entry(status: 1, terminated: false, output: Data(), errors: "syntax error") == source.failed("Music could not be read"))
     #expect(source.entry(status: 0, terminated: false, output: Data("not json".utf8), errors: "") == source.failed("Music could not be read"))
+}
+
+@Test func musicSourceFitsTheSourceContract() {
+    #expect(fitsTheSourceContract(MusicSource()))
 }

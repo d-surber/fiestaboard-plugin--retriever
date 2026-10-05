@@ -16,7 +16,7 @@ if arguments.first == "status" { ConfigCommand.status() }
 
 // What is served: the built-in sources, and the modules a valid, signed,
 // unexpired module config lists.
-let state = ServerState(builtIn: allSources, directory: ConfigStore.installed,
+let state = ServerState(builtIn: builtInSources, directory: ConfigStore.installed,
                         builtInKey: ConfigStore.builtInKey(), connect: connectModules)
 let serverInfo = ServerInfo.current(port: port.rawValue)
 let sourceTimeout: TimeInterval = 3   // the plugin gives a whole fetch 4 s
@@ -76,6 +76,9 @@ func handle(_ conn: NWConnection) {
             }
             respond(conn, "200 OK", body)
         }
+        // A module that could not be reached is tried again now that a
+        // request has come, after this one is answered so it is not held up.
+        if state.incomplete { DispatchQueue.main.async { state.refresh(retryingModules: true) } }
         if path == Wire.serverPath { return send(serverInfo) }
         if path == Wire.configPath { return send(state.config.schemas) }
         retrieve(from: state.sources, timeout: sourceTimeout) { send($0) }
@@ -106,7 +109,8 @@ state.refresh()
 startListener()
 
 // Look at the module config again every minute: a newly installed one is
-// picked up, and an expired one is dropped, without a restart.
+// picked up, and an expired one is dropped, without a restart. Modules that
+// could not be reached are not retried here, only when a request arrives.
 let configTimer = DispatchSource.makeTimerSource(queue: .main)
 configTimer.schedule(deadline: .now() + 60, repeating: 60)
 configTimer.setEventHandler { state.refresh() }

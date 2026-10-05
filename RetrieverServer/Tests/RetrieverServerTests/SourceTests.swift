@@ -52,16 +52,3 @@ private func retrieved(_ sources: [Source], timeout: TimeInterval = 2) async -> 
     #expect(source.failed("broken") == Entry(error: "broken", data: ["n": 0]))
     #expect(source.succeeded(["n": 5]) == Entry(error: "", data: ["n": 5]))
 }
-
-// MARK: Every source in the server's list
-//
-// These hold for whatever the list contains: they name no source, so adding
-// one changes nothing here. A source's own tests live in its own file.
-
-@Test func everySourceHasADistinctNameAndADefaultThatFitsItsSchema() {
-    #expect(Set(allSources.map(\.name)).count == allSources.count)
-    for source in allSources {
-        #expect(source.defaultData != .null, "\(source.name) has no default")
-        #expect(matches(source.defaultData, source.schema), "\(source.name)'s default does not fit its schema")
-    }
-}

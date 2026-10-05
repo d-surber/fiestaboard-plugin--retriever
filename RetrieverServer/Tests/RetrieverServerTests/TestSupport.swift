@@ -17,6 +17,11 @@ func matches(_ value: JSON, _ schema: JSON) -> Bool {
     return Set(object.keys) == Set(expected.keys) && object.allSatisfy { matches($0.value, expected[$0.key] ?? .null) }
 }
 
+/// What every source must satisfy; each module's tests call this for its source.
+func fitsTheSourceContract(_ source: Source) -> Bool {
+    !source.name.isEmpty && source.defaultData != .null && matches(source.defaultData, source.schema)
+}
+
 /// A stand-in source that reports a fixed value.
 struct FixedSource: Source {
     let name: String

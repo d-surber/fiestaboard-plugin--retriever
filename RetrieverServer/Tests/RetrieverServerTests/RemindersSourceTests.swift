@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import RetrieverServer
+@testable import RetrieverSourceReminders
 @testable import RetrieverSourceKit
 
 @Test func remindersPayloadFitsItsSchema() throws {
@@ -25,4 +25,8 @@ import Testing
     let source = RemindersSource()
     #expect(Set(properties(of: source.schema).keys) == ["count", "items"])
     #expect(source.defaultData == ["count": 0, "items": []])
+}
+
+@Test func remindersSourceFitsTheSourceContract() {
+    #expect(fitsTheSourceContract(RemindersSource()))
 }

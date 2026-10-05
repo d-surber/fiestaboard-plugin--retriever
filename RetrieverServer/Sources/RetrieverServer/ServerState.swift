@@ -15,6 +15,9 @@ final class ServerState {
     private let connect: ([ModuleConfig.Module]) -> [Source]
     private let configSource = ConfigSource()
     private var seen = ""
+    /// A module the config lists could not be reached. It is tried again
+    /// when a request arrives, not before: nothing needs it sooner.
+    private(set) var incomplete = false
     private var lastWarning = ""
 
     /// - Parameters:
@@ -27,18 +30,24 @@ final class ServerState {
         self.connect = connect
     }
 
-    /// Looks at the module config again. Returns true if what is served changed.
+    /// Looks at the module config again. With `retryingModules`, also tries
+    /// again to reach any module that could not be reached before. Returns
+    /// true if what is served changed.
     @discardableResult
-    func refresh(now: Date = Date()) -> Bool {
+    func refresh(now: Date = Date(), retryingModules: Bool = false) -> Bool {
         let latest = ConfigStore.load(from: directory, builtInKey: builtInKey, now: now)
         warn(latest, now: now)
         let state = "\(ConfigStore.fingerprint(of: directory))|\(latest)"
-        guard state != seen else { return false }
+        guard state != seen || (retryingModules && incomplete) else { return false }
+        if state != seen, case .invalid(let reason) = latest { log("Module config: \(reason); no modules loaded") }
         seen = state
         verdict = latest
         configSource.verdict = latest
-        if case .invalid(let reason) = latest { log("Module config: \(reason); no modules loaded") }
-        sources = builtIn + [configSource] + connect(latest.modules)
+        let modules = connect(latest.modules)
+        incomplete = modules.count < latest.modules.count
+        let updated = builtIn + [configSource] + modules
+        guard updated.map(\.name) != sources.map(\.name) || Config(sources: updated).seq != config.seq else { return false }
+        sources = updated
         config = Config(sources: sources)
         log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(config.seq)")
         return true

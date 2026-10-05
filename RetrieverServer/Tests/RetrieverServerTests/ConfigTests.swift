@@ -7,10 +7,10 @@ import Testing
 private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 
 @Test func configListsEverySourceWithItsSchema() {
-    let config = Config(sources: allSources)
-    #expect(Set(config.schemas.keys) == Set(allSources.map(\.name)))
-    #expect(config.schemas.count == allSources.count)
-    for source in allSources {
+    let config = Config(sources: vectorSources)
+    #expect(Set(config.schemas.keys) == Set(vectorSources.map(\.name)))
+    #expect(config.schemas.count == vectorSources.count)
+    for source in vectorSources {
         #expect(config.schemas[source.name] == source.schema)
     }
     #expect(config.seq == Config.sequenceNumber(of: config.schemas))
@@ -44,7 +44,7 @@ private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 }
 
 @Test func aConfigResponseCarriesTheSequenceNumberAndIsBoundToItsPath() throws {
-    let config = Config(sources: allSources)
+    let config = Config(sources: vectorSources)
     let body = try Wire.seal(response: config.schemas, id: "abc123", seq: config.seq, path: Wire.configPath, key: key)
     let box = try ChaChaPoly.SealedBox(combined: body)
     #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: key, authenticating: Wire.responseContext(Wire.retrievePath)) }

@@ -18,3 +18,7 @@ import Testing
 @Test func osDefaultIsEmpty() {
     #expect(OSSource().defaultData == ["version": "", "build": ""])
 }
+
+@Test func oSSourceFitsTheSourceContract() {
+    #expect(fitsTheSourceContract(OSSource()))
+}

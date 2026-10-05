@@ -202,6 +202,43 @@ private final class Installation {
     #expect(installation.state.verdict == .invalid("module config signature is not valid"))
 }
 
+@Test func aModuleThatCouldNotBeReachedIsTriedAgainOnlyWhenARequestArrives() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var reachable = ["os"]
+    var attempts = 0
+    let state = ServerState(builtIn: [], directory: directory, builtInKey: nil) { modules in
+        attempts += 1
+        return modules.map { String($0.identifier.split(separator: ".").last!) }.filter(reachable.contains)
+            .map { FixedSource(name: $0, schema: ["type": "string"]) }
+    }
+    let bytes = config(modules: ["local.retriever-source.os", "local.retriever-source.words"]).encoded()
+    try bytes.write(to: directory.appendingPathComponent(ConfigStore.configFile))
+    try key.signature(for: bytes).derRepresentation.write(to: directory.appendingPathComponent(ConfigStore.signatureFile))
+    try Data(pem.utf8).write(to: directory.appendingPathComponent(ConfigStore.publicKeyFile))
+
+    #expect(state.refresh(now: now))
+    #expect(state.sources.map(\.name) == ["module_config", "os"])
+    #expect(state.incomplete)
+    #expect(!state.refresh(now: now))                    // the minute timer: no retry
+    #expect(attempts == 1)
+    #expect(!state.refresh(now: now, retryingModules: true))   // a request: tried, still missing, nothing changed
+    #expect(attempts == 2)
+    reachable.append("words")
+    #expect(!state.refresh(now: now))                    // the timer still does not retry
+    #expect(attempts == 2)
+    #expect(state.refresh(now: now, retryingModules: true))    // a request: now it answers
+    #expect(state.sources.map(\.name) == ["module_config", "os", "words"])
+    #expect(!state.incomplete)
+    #expect(!state.refresh(now: now, retryingModules: true))
+    #expect(attempts == 3)                               // all present: nothing left to retry
+}
+
+@Test func theServerHasNoSourcesOfItsOwn() {
+    #expect(builtInSources.isEmpty)
+}
+
 @Test func modulesAreDroppedWhenTheConfigExpires() throws {
     let installation = try Installation()
     try installation.install(config(expiresIn: 5, modules: ["local.retriever-source.os"]))

@@ -3,8 +3,10 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>local.retriever-server</string>
+    <string>local.retriever-source.music</string>
     <key>CFBundleName</key>
-    <string>RetrieverServer</string>
+    <string>RetrieverSourceMusic</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Reports what Music is playing to FiestaBoard.</string>
 </dict>
 </plist>
