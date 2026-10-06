@@ -9,6 +9,7 @@ import base64
 import http.client
 import importlib.util
 import json
+import socket
 import threading
 import time
 import urllib.error
@@ -190,6 +191,77 @@ class TestConfig:
         assert info["file"] == str(running.list_file)
 
 
+class TestOneReadingPerResponse:
+    """Every part of a response comes from the file as it was at one moment, however often the file changes."""
+
+    def test_the_file_is_read_once_for_each_request(self, plugin, running, monkeypatch):
+        source = running.http_server.source
+        readings = []
+        read_the_file = source.elements
+
+        def counted():
+            readings.append(1)
+            return read_the_file()
+
+        monkeypatch.setattr(source, "elements", counted)
+        fetched_data(plugin)
+        assert len(readings) == 3  # /server, /config and /retrieve
+
+    def test_the_element_and_the_sequence_number_agree_when_the_file_changes_between_them(self, plugin, running, monkeypatch):
+        """The file is rewritten the moment it has been read, as an editor might do in the middle of a request."""
+        fetched_data(plugin)
+        source = running.http_server.source
+        read_the_file = source.elements
+
+        def read_then_change():
+            elements = read_the_file()
+            running.write([{"temperature": 21.5}])
+            return elements
+
+        monkeypatch.setattr(source, "elements", read_then_change)
+        contents = source.read()
+        assert source.next(contents)[0]["data"] == ELEMENTS[1]
+        assert source.seq(contents) == plugin._server_self_description.sequence_number
+        assert source.seq() != source.seq(contents)  # the next request sees the new file
+
+
+class TestAwkwardFiles:
+    """Files the server must put up with, and bad data it must be able to send, being for tests."""
+
+    def nested(self, depth):
+        return "[" * depth + "]" * depth
+
+    @pytest.mark.parametrize("depth", [2000, 100000])
+    def test_a_file_nested_too_deeply_is_the_sources_error_and_the_server_carries_on(self, plugin, running, depth):
+        running.write(f'[{{"deep": {self.nested(depth)}}}]')
+        entry = fetched_data(plugin)["test"]
+        assert entry["data"] is None
+        assert "nested too deeply" in entry["error"]
+        running.write(ELEMENTS)
+        assert fetched_data(plugin)["test"]["data"]["label"] in ("first", "second", "third")
+
+    def test_nesting_python_can_manage_is_served_with_no_limit_of_the_servers_own(self, plugin, running):
+        running.write(f'[{{"deep": {self.nested(200)}}}]')
+        value = fetched_data(plugin)["test"]["data"]["deep"]
+        for _ in range(199):
+            value = value[0]
+        assert value == []
+
+    def test_a_byte_order_mark_is_not_a_fault(self, plugin, running):
+        running.list_file.write_bytes(b"\xef\xbb\xbf" + json.dumps(ELEMENTS).encode())
+        assert fetched_data(plugin)["test"]["data"]["label"] == "first"
+
+    def test_numbers_that_are_not_json_are_sent_as_they_are(self, running):
+        running.write('[{"reading": NaN, "limit": Infinity}]')
+        data = running.http_server.source.next()[0]["data"]
+        assert data["reading"] != data["reading"]
+        assert data["limit"] == float("inf")
+
+    def test_the_source_may_have_a_name_the_plugin_reserves(self):
+        source = test_server.ListSource(str(REPOSITORY_ROOT / "test_server" / "example.json"), "error")
+        assert list(source.config()) == ["error"]
+
+
 class TestListRows:
     """The plugin's list rows, over data with lists inside lists."""
 
@@ -266,6 +338,24 @@ class TestRefusals:
         plugin = retriever.RetrieverPlugin(json.loads((REPOSITORY_ROOT / "manifest.json").read_text()))
         plugin.config = {"server_url": running.url, "api_key": base64.b64encode(bytes(32)).decode()}
         assert plugin.fetch_data().data == {"error": "no response (wrong key?); config pending"}
+
+
+class TestAbandonedConnections:
+    """A client that stops half-way is dropped after a while, so the server cleans up after a test that broke."""
+
+    @pytest.mark.parametrize(
+        "sent",
+        [b"", b"POST /retrieve HTTP/1.1\r\n", b"POST /retrieve HTTP/1.1\r\nContent-Length: 100\r\n\r\nonly this much"],
+        ids=["nothing", "part of the headers", "part of the body"],
+    )
+    def test_the_connection_is_closed_when_the_client_stops_sending(self, running, monkeypatch, sent):
+        monkeypatch.setattr(running.http_server.RequestHandlerClass, "timeout", 0.2)
+        with socket.create_connection(("127.0.0.1", running.http_server.server_port), timeout=5) as connection:
+            connection.sendall(sent)
+            assert connection.recv(100) == b""  # closed by the server, with nothing said
+
+    def test_the_wait_is_a_minute(self):
+        assert test_server.CLIENT_READ_TIMEOUT_SECONDS == 60
 
 
 class TestTheExample:

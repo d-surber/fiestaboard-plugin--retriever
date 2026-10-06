@@ -9,7 +9,14 @@ list, in order, and after the last it starts again at the first. So a test
 decides exactly what the plugin sees, and when.
 
 The list is the data of a single source. The file is read again on every
-request, so editing it takes effect at once.
+request, once, so editing it takes effect at once and every part of one
+response comes from the same reading.
+
+Being for tests, it serves what it is given, bad data included: NaN and
+Infinity in the file are sent as they are, though neither is JSON, and the
+source may be given a name the plugin reserves, such as "error". It answers
+a malformed request with an HTTP error where a production server would say
+nothing, and it reports the file's full path when the file is at fault.
 
 Settings, all from the environment:
 
@@ -35,7 +42,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, NamedTuple
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
@@ -44,6 +51,10 @@ VERSION = "0.1.0"
 PROTOCOLS = (1, 1)  # the inclusive range of protocols spoken
 MAX_SKEW_SECONDS = 60
 MAX_REQUEST_BYTES = 16384
+# How long a connection may go without sending what it owes: a request, or the
+# rest of one. Tests break things; a client that stops half-way must not leave
+# a thread waiting on it for good.
+CLIENT_READ_TIMEOUT_SECONDS = 60
 PATHS = ("/server", "/config", "/retrieve")
 
 
@@ -87,8 +98,27 @@ def empty_of(value: Any) -> Any:
     return None
 
 
+class ListFileContents(NamedTuple):
+    """
+    The list file as it was at one reading.
+
+    Attributes:
+        elements: The list, or None if the file cannot be served.
+        problem: Why it cannot be served; "" if it can.
+    """
+
+    elements: list[Any] | None
+    problem: str
+
+
 class ListSource:
-    """The one source: the elements of the list in the file, one per retrieve, round and round."""
+    """
+    The one source: the elements of the list in the file, one per retrieve, round and round.
+
+    Each method that depends on the file takes its contents as read for the
+    request in hand, so that one response never mixes two versions of the
+    file. Given none, it reads the file itself.
+    """
 
     def __init__(self, path: str, name: str = "test"):
         self.path = path
@@ -99,48 +129,70 @@ class ListSource:
     def elements(self) -> list[Any]:
         """The list in the file. Raises ValueError saying what is wrong with it."""
         try:
-            with open(self.path, encoding="utf-8") as file:
+            # utf-8-sig: a file saved with a byte-order mark is still JSON.
+            with open(self.path, encoding="utf-8-sig") as file:
                 elements = json.load(file)
         except OSError as error:
             raise ValueError(f"cannot read {self.path}: {error.strerror or error}") from None
+        except RecursionError:
+            raise ValueError(f"{self.path} is nested too deeply to read") from None
         except ValueError:
             raise ValueError(f"{self.path} is not JSON") from None
         if not isinstance(elements, list) or not elements:
             raise ValueError(f"{self.path} does not hold a list with something in it")
         return elements
 
-    def schema(self) -> dict[str, Any]:
-        """The shape of the source's data, from the first element."""
+    def read(self) -> ListFileContents:
+        """
+        Read the file once, for one request.
+
+        The contents are checked for everything a response needs of them: a
+        list too deeply nested for Python to describe or to write as JSON is
+        reported as a problem here, where it can be, and not left to fail
+        half-way through a response. The server sets no limit of its own.
+        """
         try:
-            first = self.elements()[0]
-        except ValueError:
+            elements = self.elements()
+            schema_of(elements[0])
+            empty_of(elements[0])
+            json.dumps(elements)
+        except ValueError as error:
+            return ListFileContents(None, str(error))
+        except RecursionError:
+            return ListFileContents(None, f"{self.path} is nested too deeply to serve")
+        return ListFileContents(elements, "")
+
+    def schema(self, contents: ListFileContents | None = None) -> dict[str, Any]:
+        """The shape of the source's data, from the first element."""
+        contents = contents or self.read()
+        if contents.elements is None:
             return {"default": None}
+        first = contents.elements[0]
         return {**schema_of(first), "default": empty_of(first)}
 
-    def config(self) -> dict[str, Any]:
-        return {self.name: self.schema()}
+    def config(self, contents: ListFileContents | None = None) -> dict[str, Any]:
+        return {self.name: self.schema(contents or self.read())}
 
-    def seq(self) -> int:
+    def seq(self, contents: ListFileContents | None = None) -> int:
         """Identifies the config: changes when its content does, whatever the key order or layout."""
-        canonical = json.dumps(self.config(), sort_keys=True, separators=(",", ":")).encode()
+        config = self.config(contents or self.read())
+        canonical = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
         return int.from_bytes(hashlib.sha256(canonical).digest()[:4], "big")
 
-    def next(self) -> tuple[dict[str, Any], str]:
+    def next(self, contents: ListFileContents | None = None) -> tuple[dict[str, Any], str]:
         """The next entry to send, and a note for the log."""
+        contents = contents or self.read()
         with self._lock:
-            try:
-                elements = self.elements()
-            except ValueError as error:
-                return {"error": str(error), "data": None}, str(error)
+            elements = contents.elements
+            if elements is None:
+                return {"error": contents.problem, "data": None}, contents.problem
             index = self.position % len(elements)
             self.position = (index + 1) % len(elements)
             return {"error": "", "data": elements[index]}, f"element {index} of {len(elements)}"
 
-    def info(self, port: int) -> dict[str, Any]:
-        try:
-            count = len(self.elements())
-        except ValueError:
-            count = 0
+    def info(self, port: int, contents: ListFileContents | None = None) -> dict[str, Any]:
+        contents = contents or self.read()
+        count = len(contents.elements) if contents.elements is not None else 0
         return {
             "name": NAME,
             "version": VERSION,
@@ -158,6 +210,7 @@ def make_handler(source: ListSource, key: bytes, port: int, log=print):
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        timeout = CLIENT_READ_TIMEOUT_SECONDS  # the base class applies it to the connection
 
         def say_nothing(self, why: str) -> None:
             """Close the connection without a response: for anything that has not shown the key."""
@@ -186,7 +239,10 @@ def make_handler(source: ListSource, key: bytes, port: int, log=print):
                 return self.say_nothing("no length")
             if not 0 <= length <= MAX_REQUEST_BYTES:
                 return self.say_nothing("too large")
-            body = self.rfile.read(length)
+            try:
+                body = self.rfile.read(length)
+            except TimeoutError:
+                return self.say_nothing("the rest of the request never came")
             try:
                 plaintext = cipher.decrypt(body[:12], body[12:], request_context(self.path))
             except Exception:
@@ -208,15 +264,17 @@ def make_handler(source: ListSource, key: bytes, port: int, log=print):
             if self.path != "/server" and not PROTOCOLS[0] <= protocol <= PROTOCOLS[1]:
                 return self.refuse(400, "Unsupported Protocol")
 
+            # One reading of the file for the whole response.
+            contents = source.read()
             note = ""
             if self.path == "/server":
-                data: Any = source.info(port)
+                data: Any = source.info(port, contents)
             elif self.path == "/config":
-                data = source.config()
+                data = source.config(contents)
             else:
-                entry, note = source.next()
+                entry, note = source.next(contents)
                 data = {source.name: entry}
-            message = json.dumps({"id": request_id, "seq": source.seq(), "data": data}).encode()
+            message = json.dumps({"id": request_id, "seq": source.seq(contents), "data": data}).encode()
             nonce = os.urandom(12)
             sealed = nonce + cipher.encrypt(nonce, message, response_context(self.path))
             log(f"POST {self.path} -> 200" + (f" ({note})" if note else ""))
@@ -268,10 +326,11 @@ def main() -> int:
     server = serve(path, key, port, name, log)
     source: ListSource = server.source  # type: ignore[attr-defined]
     log(f"{NAME} {VERSION} on port {server.server_port}, source \"{name}\", file {path}")
-    try:
-        log(f"{len(source.elements())} elements; the next retrieve sends element 0")
-    except ValueError as error:
-        log(f"warning: {error}")
+    contents = source.read()
+    if contents.elements is None:
+        log(f"warning: {contents.problem}")
+    else:
+        log(f"{len(contents.elements)} elements; the next retrieve sends element 0")
     if made:
         log(f"key (enter it in the plugin's settings): {encoded}")
     try:
