@@ -226,17 +226,46 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
     let log = directory.appendingPathComponent("RetrieverServer.log")
 
     try Data(repeating: 65, count: 100).write(to: log)
-    #expect(LogFile.rotateIfLarge(log, maxBytes: 100) == false)   // at the limit is not past it
+    #expect(LogFile.rotateIfLarge(log, maxByteCount: 100) == false)   // at the limit is not past it
     #expect(FileManager.default.fileExists(atPath: LogFile.earlier(log).path) == false)
 
     try Data(repeating: 66, count: 101).write(to: log)
-    #expect(LogFile.rotateIfLarge(log, maxBytes: 100))
+    #expect(LogFile.rotateIfLarge(log, maxByteCount: 100))
     #expect(FileManager.default.fileExists(atPath: log.path) == false)
     #expect(try Data(contentsOf: LogFile.earlier(log)) == Data(repeating: 66, count: 101))
 
     try Data(repeating: 67, count: 200).write(to: log)
-    #expect(LogFile.rotateIfLarge(log, maxBytes: 100))
+    #expect(LogFile.rotateIfLarge(log, maxByteCount: 100))
     #expect(try Data(contentsOf: LogFile.earlier(log)) == Data(repeating: 67, count: 200))   // the one before is gone
 
-    #expect(LogFile.rotateIfLarge(log, maxBytes: 100) == false)   // no log, nothing to do
+    #expect(LogFile.rotateIfLarge(log, maxByteCount: 100) == false)   // no log, nothing to do
+}
+
+@Test func eachLogLevelIncludesTheOnesBeforeIt() {
+    #expect(LogLevel.allCases == [.none, .terse, .verbose, .debug])
+    #expect(LogLevel.none < .terse && LogLevel.terse < .verbose && LogLevel.verbose < .debug)
+    #expect(LogLevel.standard == .terse)
+}
+
+@Test func aLogLevelIsNamedByItsWord() {
+    #expect(LogLevel(named: "verbose") == .verbose)
+    #expect(LogLevel(named: " Debug\n") == .debug)
+    #expect(LogLevel(named: "none") == LogLevel.none)
+    #expect(LogLevel(named: "chatty") == nil)
+    #expect(LogLevel(named: "") == nil)
+}
+
+@Test func theAccountsChoiceOfLogLevelIsKeptInAFileAndTheStandardLevelStandsInForNone() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let file = LogSettings.file(home: home)
+    #expect(file.path.hasSuffix("Library/Application Support/Retriever/log-level"))
+    #expect(LogSettings.level(in: file) == .terse)             // no file
+
+    for level in LogLevel.allCases {
+        try LogSettings.set(level, in: file)
+        #expect(LogSettings.level(in: file) == level)
+    }
+    try Data("nonsense".utf8).write(to: file)
+    #expect(LogSettings.level(in: file) == .terse)             // a file that names no level
 }

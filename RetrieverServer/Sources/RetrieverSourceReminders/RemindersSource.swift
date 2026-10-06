@@ -76,7 +76,7 @@ final class RemindersSource: Source {
                       cal.isDateInToday(due) else { return nil }
                 return Item(title: r.title ?? "", list: r.calendar.title, due: due, priority: r.priority)
             }
-            log("Fetched \(all.count) incomplete, \(items.count) due today")
+            log(.debug, "Fetched \(all.count) incomplete, \(items.count) due today")
             done(self.succeeded(Payload(items: items.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) })))
         }
     }

@@ -65,6 +65,14 @@ enum Help {
               trusted, whether the config is valid and when it expires, and
               whether each module it allows can be reached.
 
+          RetrieverServer log [none | terse | verbose | debug]
+              How much is written to the log. With no level, shows the one in
+              force. Each level includes those before it: terse (the standard)
+              is starting, what is served and whatever goes wrong; verbose adds
+              each request answered and a count of connections that were not;
+              debug adds each source's answer and how long it took. The server
+              and its modules follow a change within a few seconds.
+
           RetrieverServer help
               This text.
 
@@ -74,7 +82,8 @@ enum Help {
           Config key      \(ConfigStore.installed.path)/config-key.pub           (root)
           Launchd agents  \(Installation.launchAgents.path)/local.retriever-*.plist                  (root)
           Transport key   ~/Library/Application Support/Retriever/transport.key      (yours only)
-          Log             ~/Library/Logs/RetrieverServer.log
+          Log             ~/Library/Logs/RetrieverServer.log                         (kept under about 2 MB)
+          Log level       ~/Library/Application Support/Retriever/log-level          (yours)
 
         SIGNING A CONFIG ELSEWHERE
           A config can be signed on another machine with ordinary tools, keeping

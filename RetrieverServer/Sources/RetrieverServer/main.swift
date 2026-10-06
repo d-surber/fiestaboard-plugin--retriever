@@ -14,6 +14,7 @@ case nil: break   // no command: be the server
 case "install": InstallCommand.run()
 case "config": ConfigCommand.run(Array(arguments.dropFirst()))
 case "status": ConfigCommand.status()
+case "log": LogCommand.run(Array(arguments.dropFirst()))
 case "help", "--help", "-h":
     print(Help.text(program: ConfigCommand.program))
     exit(0)
@@ -45,7 +46,7 @@ state.refresh(waiting: true)
 let listener = RequestListener(key: key, state: state, serverInfo: serverInfo)
 do {
     // Advertised by Bonjour so that a HomePod acting as sleep proxy can wake the Mac.
-    try listener.start(on: port, advertisedAs: "Retriever") { log("Listener: \($0)") }
+    try listener.start(on: port, advertisedAs: "Retriever") { log(.verbose, "Listener: \($0)") }
 } catch {
     log("Failed to start listener: \(error)")
     exit(1)

@@ -7,6 +7,7 @@ import RetrieverSourceKit
 /// one name, the first to answer is the one reported.
 func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQueue = .main, _ done: @escaping ([String: Entry]) -> Void) {
     var entries: [String: Entry] = [:]   // only touched on `queue`
+    let asked = Date()
     let namesToHearFrom = Set(sources.map(\.name)).count
     var finished = false
     func finish() {
@@ -24,6 +25,8 @@ func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQ
                 queue.async {
                     guard !finished, entries[source.name] == nil else { return }
                     entries[source.name] = entry
+                    log(.debug, "\(source.name) answered in \(Int(Date().timeIntervalSince(asked) * 1000)) ms"
+                                + (entry.error.isEmpty ? "" : ": \(entry.error)"))
                     if entries.count == namesToHearFrom { finish() }
                 }
             }

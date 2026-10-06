@@ -64,7 +64,7 @@ final class RequestListener {
     /// such line, if any did and that line was long enough ago. Called from
     /// time to time so that a count is not left waiting for the next knock.
     func logUnanswered(now: Date = Date()) {
-        if let summary = unanswered.summary(now: now) { log(summary) }
+        if let summary = unanswered.summary(now: now) { log(.verbose, summary) }
     }
 
     // MARK: One connection
@@ -170,7 +170,7 @@ final class RequestListener {
         connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
         // A client that never reads its answer is not waited on for long.
         queue.asyncAfter(deadline: .now() + limits.requestTimeout) { connection.cancel() }
-        log("\(path) from \(connection.endpoint) -> \(status)")
+        log(.verbose, "\(path) from \(connection.endpoint) -> \(status)")
     }
 
     /// Closes the connection without a response: for anything that has not
@@ -184,6 +184,9 @@ final class RequestListener {
     }
 
     private func noteUnanswered(_ reason: String) {
+        // One by one only for someone looking for a fault: at this level a
+        // caller without the key can write as many lines as it makes connections.
+        log(.debug, "a connection given no response (\(reason))")
         unanswered.record(reason)
         logUnanswered()
     }

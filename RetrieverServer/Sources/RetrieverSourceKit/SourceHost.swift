@@ -44,7 +44,7 @@ public enum SourceHost {
         let delegate = Delegate(Exported(source))
         listener.delegate = delegate
         listener.resume()
-        log("\(service): ready")
+        log(.verbose, "\(service): ready")
         withExtendedLifetime(delegate) { RunLoop.main.run() }
         exit(0)
     }
