@@ -4,16 +4,20 @@ import Testing
 @testable import RetrieverServer
 @testable import RetrieverSourceKit
 
+/// The moment the tests take to be the present.
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
-private let day: TimeInterval = 86400
-private let key = P256.Signing.PrivateKey()
-private let pem = key.publicKey.pemRepresentation
+private let secondsPerDay: TimeInterval = 86400
+/// The key the tests' configs are signed with, and its public half as the server reads it.
+private let configKey = P256.Signing.PrivateKey()
+private let configKeyPEM = configKey.publicKey.pemRepresentation
 
+/// A module config that expires a number of days from `now` and allows these modules.
 private func config(expiresIn days: Double = 90, modules: [String] = ["local.retriever-source.numbers"]) -> ModuleConfig {
-    ModuleConfig(version: 3, expires: now.addingTimeInterval(days * day), modules: modules.map { ModuleConfig.Module(identifier: $0) })
+    ModuleConfig(version: 3, expires: now.addingTimeInterval(days * secondsPerDay), modules: modules.map { ModuleConfig.Module(identifier: $0) })
 }
 
-private func signature(_ data: Data, with signer: P256.Signing.PrivateKey = key) throws -> Data {
+/// The detached signature of a config's bytes, as `config sign` would write it.
+private func signature(_ data: Data, with signer: P256.Signing.PrivateKey = configKey) throws -> Data {
     try signer.signature(for: data).derRepresentation
 }
 
@@ -21,45 +25,45 @@ private func signature(_ data: Data, with signer: P256.Signing.PrivateKey = key)
 
 @Test func aSignedUnexpiredConfigIsValid() throws {
     let bytes = config().encoded()
-    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: pem, now: now) == .valid(config()))
+    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: configKeyPEM, now: now) == .valid(config()))
 }
 
 @Test func aConfigChangedAfterSigningIsRefused() throws {
     let bytes = config().encoded()
     let altered = config(modules: ["local.retriever-source.numbers", "local.retriever-source.intruder"]).encoded()
-    #expect(ModuleConfigStore.verify(config: altered, signature: try signature(bytes), publicKeyPEM: pem, now: now)
+    #expect(ModuleConfigStore.verify(config: altered, signature: try signature(bytes), publicKeyPEM: configKeyPEM, now: now)
             == .invalid("module config signature is not valid"))
 }
 
 @Test func aConfigSignedWithAnotherKeyIsRefused() throws {
     let bytes = config().encoded()
     let other = try signature(bytes, with: P256.Signing.PrivateKey())
-    #expect(ModuleConfigStore.verify(config: bytes, signature: other, publicKeyPEM: pem, now: now) == .invalid("module config signature is not valid"))
+    #expect(ModuleConfigStore.verify(config: bytes, signature: other, publicKeyPEM: configKeyPEM, now: now) == .invalid("module config signature is not valid"))
 }
 
 @Test func anExpiredConfigIsRefusedEvenThoughItsSignatureIsGood() throws {
     let bytes = config(expiresIn: 90).encoded()
-    let later = now.addingTimeInterval(90 * day)
-    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: pem, now: later) == .invalid("module config expired"))
-    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: pem, now: later.addingTimeInterval(-1)) == .valid(config()))
+    let later = now.addingTimeInterval(90 * secondsPerDay)
+    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: configKeyPEM, now: later) == .invalid("module config expired"))
+    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: configKeyPEM, now: later.addingTimeInterval(-1)) == .valid(config()))
 }
 
 @Test func thereIsNoUnsignedMode() throws {
     let bytes = config().encoded()
-    #expect(ModuleConfigStore.verify(config: bytes, signature: nil, publicKeyPEM: pem, now: now) == .invalid("module config is not signed"))
-    #expect(ModuleConfigStore.verify(config: bytes, signature: Data(), publicKeyPEM: pem, now: now) == .invalid("module config signature is not valid"))
+    #expect(ModuleConfigStore.verify(config: bytes, signature: nil, publicKeyPEM: configKeyPEM, now: now) == .invalid("module config is not signed"))
+    #expect(ModuleConfigStore.verify(config: bytes, signature: Data(), publicKeyPEM: configKeyPEM, now: now) == .invalid("module config signature is not valid"))
     #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: nil, now: now) == .invalid("no config key"))
-    #expect(ModuleConfigStore.verify(config: nil, signature: nil, publicKeyPEM: pem, now: now) == .invalid("no module config"))
+    #expect(ModuleConfigStore.verify(config: nil, signature: nil, publicKeyPEM: configKeyPEM, now: now) == .invalid("no module config"))
     #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: "not a key", now: now) == .invalid("config key is unreadable"))
 }
 
 @Test func aSignedFileThatIsNotAConfigIsRefused() throws {
     let bytes = Data("{\"modules\": \"all of them\"}".utf8)
-    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: pem, now: now) == .invalid("module config is unreadable"))
+    #expect(ModuleConfigStore.verify(config: bytes, signature: try signature(bytes), publicKeyPEM: configKeyPEM, now: now) == .invalid("module config is unreadable"))
 }
 
 /// A config signed with `openssl dgst -sha256 -sign`, the way one would be
-/// signed away from this Mac. Its key was discarded.
+/// signed away from this Mac. Its configKey was discarded.
 @Test func aConfigSignedWithOpenSSLIsAccepted() throws {
     let bytes = Data("{\"version\": 1, \"expires\": \"2999-01-01T00:00:00Z\", \"modules\": [{\"identifier\": \"local.retriever-source.numbers\"}, {\"identifier\": \"local.retriever-source.words\", \"cdhash\": \"00112233445566778899aabbccddeeff00112233\"}]}".utf8)
     let signed = try #require(Data(base64Encoded: "MEQCIDAG4Hz8yeSaA1HCXHqFbcys6G9B8j88PIQR6d0HDFn0AiABimjaZK5ki8fJlYdey5s2G10fsRt+7eg8wKu6KI1tJQ=="))
@@ -77,7 +81,7 @@ private func signature(_ data: Data, with signer: P256.Signing.PrivateKey = key)
 // MARK: Expiry
 
 @Test func theConfigIsValidFor90DaysByDefault() {
-    #expect(ModuleConfig.defaultValidity == 90 * day)
+    #expect(ModuleConfig.defaultValidity == 90 * secondsPerDay)
     #expect(ModuleConfig.warningDays == 14)
 }
 
@@ -101,11 +105,11 @@ func warnsFromFourteenDaysBeforeExpiry(days: Double, remaining: Int, warning: St
     let source = ModuleConfigSource()
     source.verdict = .valid(config(expiresIn: 90))
     #expect(source.entry(now: now) == source.succeeded(ModuleConfigSource.Payload(
-        expires: ISO8601DateFormatter().string(from: now.addingTimeInterval(90 * day)), days_remaining: 90, warning: "", version: 3)))
-    let later = source.entry(now: now.addingTimeInterval(80 * day))
+        expires: ISO8601DateFormatter().string(from: now.addingTimeInterval(90 * secondsPerDay)), days_remaining: 90, warning: "", version: 3)))
+    let later = source.entry(now: now.addingTimeInterval(80 * secondsPerDay))
     #expect(later.error == "")
     #expect(later.data == source.succeeded(ModuleConfigSource.Payload(
-        expires: ISO8601DateFormatter().string(from: now.addingTimeInterval(90 * day)), days_remaining: 10,
+        expires: ISO8601DateFormatter().string(from: now.addingTimeInterval(90 * secondsPerDay)), days_remaining: 10,
         warning: "module config expires in 10 days", version: 3)).data)
 }
 
@@ -114,11 +118,11 @@ func warnsFromFourteenDaysBeforeExpiry(days: Double, remaining: Int, warning: St
     source.verdict = .invalid("module config signature is not valid")
     #expect(source.entry(now: now) == source.failed("module config signature is not valid"))
     source.verdict = .valid(config(expiresIn: 1))
-    #expect(source.entry(now: now.addingTimeInterval(2 * day)) == source.failed("module config expired"))
+    #expect(source.entry(now: now.addingTimeInterval(2 * secondsPerDay)) == source.failed("module config expired"))
     #expect(matches(source.defaultData, source.schema))
 }
 
-// MARK: Which key is trusted
+// MARK: Which configKey is trusted
 
 @Test func aKeyBuiltIntoTheServerIsTheOnlyOneTrusted() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -145,7 +149,9 @@ func warnsFromFourteenDaysBeforeExpiry(days: Double, remaining: Int, warning: St
 
 // MARK: What the server serves
 
-private final class Installation {
+/// A folder standing in for the installed one, and a server state that reads its module config from there.
+/// `connected` records which modules the state asked for, each time it asked.
+private final class ConfigFolderAndState {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     var connected: [[String]] = []
     lazy var state = ServerState(builtIn: [vectorSources[0]], directory: directory, builtInKey: nil) { [unowned self] modules in
@@ -156,50 +162,52 @@ private final class Installation {
     init() throws { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
     deinit { try? FileManager.default.removeItem(at: directory) }
 
-    func install(_ config: ModuleConfig, signedWith signer: P256.Signing.PrivateKey = key) throws {
+    /// Puts a config in the folder, signed, with the tests' config key beside it as the one to trust.
+    func install(_ config: ModuleConfig, signedWith signer: P256.Signing.PrivateKey = configKey) throws {
         let bytes = config.encoded()
         try bytes.write(to: directory.appendingPathComponent(ModuleConfigStore.configFile))
         try signer.signature(for: bytes).derRepresentation.write(to: directory.appendingPathComponent(ModuleConfigStore.signatureFile))
-        try Data(pem.utf8).write(to: directory.appendingPathComponent(ModuleConfigStore.publicKeyFile))
+        try Data(configKeyPEM.utf8).write(to: directory.appendingPathComponent(ModuleConfigStore.publicKeyFile))
     }
 
+    /// The names of the sources now served.
     var names: [String] { state.sources.map(\.name) }
 }
 
 @Test func withoutAConfigOnlyTheBuiltInSourcesAreServed() throws {
-    let installation = try Installation()
-    #expect(installation.state.refresh(now: now))
-    #expect(installation.names == ["numbers", "module_config"])
-    #expect(installation.state.verdict == .invalid("no config key"))
-    #expect(installation.connected == [[]])
-    #expect(!installation.state.refresh(now: now))   // nothing changed
+    let folder = try ConfigFolderAndState()
+    #expect(folder.state.refresh(now: now))
+    #expect(folder.names == ["numbers", "module_config"])
+    #expect(folder.state.verdict == .invalid("no config key"))
+    #expect(folder.connected == [[]])
+    #expect(!folder.state.refresh(now: now))   // nothing changed
 }
 
 @Test func aValidConfigLoadsExactlyTheModulesItLists() throws {
-    let installation = try Installation()
-    try installation.install(config(modules: ["local.retriever-source.os", "local.retriever-source.words"]))
-    installation.state.refresh(now: now)
-    #expect(installation.names == ["numbers", "module_config", "os", "words"])
-    #expect(installation.connected == [["local.retriever-source.os", "local.retriever-source.words"]])
+    let folder = try ConfigFolderAndState()
+    try folder.install(config(modules: ["local.retriever-source.os", "local.retriever-source.words"]))
+    folder.state.refresh(now: now)
+    #expect(folder.names == ["numbers", "module_config", "os", "words"])
+    #expect(folder.connected == [["local.retriever-source.os", "local.retriever-source.words"]])
 }
 
 @Test func aNewlyInstalledConfigIsPickedUpAndChangesTheSequenceNumber() throws {
-    let installation = try Installation()
-    try installation.install(config(modules: ["local.retriever-source.os"]))
-    installation.state.refresh(now: now)
-    let before = installation.state.sourceConfig.fingerprint
-    try installation.install(config(modules: ["local.retriever-source.os", "local.retriever-source.words"]))
-    #expect(installation.state.refresh(now: now))
-    #expect(installation.names == ["numbers", "module_config", "os", "words"])
-    #expect(installation.state.sourceConfig.fingerprint != before)
+    let folder = try ConfigFolderAndState()
+    try folder.install(config(modules: ["local.retriever-source.os"]))
+    folder.state.refresh(now: now)
+    let before = folder.state.sourceConfig.fingerprint
+    try folder.install(config(modules: ["local.retriever-source.os", "local.retriever-source.words"]))
+    #expect(folder.state.refresh(now: now))
+    #expect(folder.names == ["numbers", "module_config", "os", "words"])
+    #expect(folder.state.sourceConfig.fingerprint != before)
 }
 
 @Test func aConfigSignedWithTheWrongKeyLoadsNothing() throws {
-    let installation = try Installation()
-    try installation.install(config(modules: ["local.retriever-source.os"]), signedWith: P256.Signing.PrivateKey())
-    installation.state.refresh(now: now)
-    #expect(installation.names == ["numbers", "module_config"])
-    #expect(installation.state.verdict == .invalid("module config signature is not valid"))
+    let folder = try ConfigFolderAndState()
+    try folder.install(config(modules: ["local.retriever-source.os"]), signedWith: P256.Signing.PrivateKey())
+    folder.state.refresh(now: now)
+    #expect(folder.names == ["numbers", "module_config"])
+    #expect(folder.state.verdict == .invalid("module config signature is not valid"))
 }
 
 @Test func aModuleThatCouldNotBeReachedIsTriedAgainOnlyWhenARequestArrives() throws {
@@ -215,8 +223,8 @@ private final class Installation {
     }
     let bytes = config(modules: ["local.retriever-source.os", "local.retriever-source.words"]).encoded()
     try bytes.write(to: directory.appendingPathComponent(ModuleConfigStore.configFile))
-    try key.signature(for: bytes).derRepresentation.write(to: directory.appendingPathComponent(ModuleConfigStore.signatureFile))
-    try Data(pem.utf8).write(to: directory.appendingPathComponent(ModuleConfigStore.publicKeyFile))
+    try configKey.signature(for: bytes).derRepresentation.write(to: directory.appendingPathComponent(ModuleConfigStore.signatureFile))
+    try Data(configKeyPEM.utf8).write(to: directory.appendingPathComponent(ModuleConfigStore.publicKeyFile))
 
     #expect(state.refresh(now: now))
     #expect(state.sources.map(\.name) == ["module_config", "os"])
@@ -240,12 +248,12 @@ private final class Installation {
 }
 
 @Test func modulesAreDroppedWhenTheConfigExpires() throws {
-    let installation = try Installation()
-    try installation.install(config(expiresIn: 5, modules: ["local.retriever-source.os"]))
-    installation.state.refresh(now: now)
-    #expect(installation.names == ["numbers", "module_config", "os"])
-    #expect(!installation.state.refresh(now: now.addingTimeInterval(4 * day)))   // still valid: nothing changes
-    #expect(installation.state.refresh(now: now.addingTimeInterval(6 * day)))
-    #expect(installation.names == ["numbers", "module_config"])
-    #expect(installation.state.verdict == .invalid("module config expired"))
+    let folder = try ConfigFolderAndState()
+    try folder.install(config(expiresIn: 5, modules: ["local.retriever-source.os"]))
+    folder.state.refresh(now: now)
+    #expect(folder.names == ["numbers", "module_config", "os"])
+    #expect(!folder.state.refresh(now: now.addingTimeInterval(4 * secondsPerDay)))   // still valid: nothing changes
+    #expect(folder.state.refresh(now: now.addingTimeInterval(6 * secondsPerDay)))
+    #expect(folder.names == ["numbers", "module_config"])
+    #expect(folder.state.verdict == .invalid("module config expired"))
 }

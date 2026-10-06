@@ -4,7 +4,7 @@ import Testing
 @testable import RetrieverServer
 @testable import RetrieverSourceKit
 
-private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
+private let transportKey = SymmetricKey(data: Data(repeating: 7, count: 32))
 
 @Test func configListsEverySourceWithItsSchema() {
     let config = SourceConfig(sources: vectorSources)
@@ -38,17 +38,17 @@ private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 @Test func aRequestForOneEndpointIsRefusedByTheOther() throws {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
     let plaintext = Data(#"{"timestamp": 1800000000, "request_id": "abc123"}"#.utf8)
-    let body = try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestAuthenticatedData(Wire.retrievePath)).combined
-    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now).id == "abc123")
-    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.configPath, key: key, now: now) }
+    let body = try ChaChaPoly.seal(plaintext, using: transportKey, authenticating: Wire.requestAuthenticatedData(Wire.retrievePath)).combined
+    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now).id == "abc123")
+    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.configPath, key: transportKey, now: now) }
 }
 
 @Test func aConfigResponseCarriesTheSequenceNumberAndIsBoundToItsPath() throws {
     let config = SourceConfig(sources: vectorSources)
-    let body = try Wire.seal(response: config.schemas, id: "abc123", configFingerprint: config.fingerprint, path: Wire.configPath, key: key)
+    let body = try Wire.seal(response: config.schemas, id: "abc123", configFingerprint: config.fingerprint, path: Wire.configPath, key: transportKey)
     let box = try ChaChaPoly.SealedBox(combined: body)
-    #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(Wire.retrievePath)) }
-    let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(Wire.configPath))
+    #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: transportKey, authenticating: Wire.responseAuthenticatedData(Wire.retrievePath)) }
+    let plain = try ChaChaPoly.open(box, using: transportKey, authenticating: Wire.responseAuthenticatedData(Wire.configPath))
     let decoded = try JSONDecoder().decode(Wire.Response<[String: JSON]>.self, from: plain)
     #expect(decoded.id == "abc123")
     #expect(decoded.configFingerprint == config.fingerprint)

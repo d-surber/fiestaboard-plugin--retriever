@@ -4,7 +4,7 @@ Make the plugin's half of tests/vectors.json: requests as the plugin encrypts th
 
 The file has two halves, each made by the side that encrypts it, for the
 other side's tests to open. This makes the requests; the server's tests make
-the responses (see RetrieverServerTests.swift). Run both, and only when the
+the responses (see WireTests.swift). Run both, and only when the
 wire format changes.
 
 Run it from a FiestaBoard source tree, which the plugin imports from:

@@ -5,7 +5,7 @@ import Testing
 @testable import RetrieverServer
 @testable import RetrieverSourceKit
 
-private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
+private let transportKey = SymmetricKey(data: Data(repeating: 7, count: 32))
 
 /// A listener on a free port of this machine, serving the stand-in sources.
 private final class RunningListener {
@@ -21,7 +21,7 @@ private final class RunningListener {
         queue.sync { _ = state.refresh() }
         self.state = state
         let queue = self.queue
-        let listener = RequestListener(key: key, state: state, serverInfo: vectorServerInfo, limits: limits, queue: queue)
+        let listener = RequestListener(key: transportKey, state: state, serverInfo: vectorServerInfo, limits: limits, queue: queue)
         self.listener = listener
         let ready = DispatchSemaphore(value: 0)
         try listener.start(on: .any, advertisedAs: nil) { if case .ready = $0 { ready.signal() } }
@@ -60,6 +60,7 @@ private final class ClientConnection {
 
     deinit { close(descriptor) }
 
+    /// Sends bytes to the server; nothing is read back until `outcome` is asked for.
     func send(_ bytes: Data) {
         bytes.withUnsafeBytes { _ = Darwin.send(descriptor, $0.baseAddress, bytes.count, 0) }
     }
@@ -79,13 +80,14 @@ private final class ClientConnection {
     }
 }
 
+/// The bytes of an HTTP request with this request line and body, and a Content-Length to match.
 private func httpRequest(_ line: String, body: Data = Data()) -> Data {
     Data("\(line)\r\nContent-Length: \(body.count)\r\n\r\n".utf8) + body
 }
 
 private func sealedRequest(path: String, timestamp: Date = Date(), id: String = "abc123") throws -> Data {
     let plaintext = Data(#"{"timestamp": \#(Int(timestamp.timeIntervalSince1970)), "request_id": "\#(id)"}"#.utf8)
-    return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestAuthenticatedData(path)).combined
+    return try ChaChaPoly.seal(plaintext, using: transportKey, authenticating: Wire.requestAuthenticatedData(path)).combined
 }
 
 /// The status line and the body of an HTTP response.
@@ -106,7 +108,7 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         guard case .answered(let response) = client.outcome(within: 5) else { Issue.record("no answer"); return }
         let (status, body) = try parts(of: response)
         #expect(status == "HTTP/1.1 200 OK")
-        let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseAuthenticatedData(path))
+        let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: transportKey, authenticating: Wire.responseAuthenticatedData(path))
         let answer = try JSONDecoder().decode(Wire.Response<JSON>.self, from: plaintext)
         #expect(answer.id == "abc123")
         #expect(answer.configFingerprint == running.queue.sync { running.state.sourceConfig.fingerprint })

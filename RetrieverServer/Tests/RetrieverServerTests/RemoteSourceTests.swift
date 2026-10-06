@@ -23,6 +23,7 @@ private final class TestModule {
     deinit { listener.invalidate() }
 }
 
+/// What a source reports when asked once.
 private func fetched(_ source: Source) async -> Entry {
     await withCheckedContinuation { continuation in source.fetch { continuation.resume(returning: $0) } }
 }

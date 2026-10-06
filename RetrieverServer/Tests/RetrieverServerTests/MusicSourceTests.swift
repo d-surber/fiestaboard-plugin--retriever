@@ -3,6 +3,7 @@ import Testing
 @testable import RetrieverSourceMusic
 @testable import RetrieverSourceKit
 
+/// What the source reports while a track is playing.
 private let playing = MusicSource.Payload(state: "playing", title: "So What", artist: "Miles Davis", album: "Kind of Blue")
 
 @Test func musicPayloadAndDefaultFitTheSchema() throws {

@@ -5,13 +5,15 @@ import Testing
 @testable import RetrieverServer
 @testable import RetrieverSourceKit
 
+/// The moment the tests take to be the present.
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
-private let signer = "certificate leaf = H\"00112233445566778899aabbccddeeff00112233\""
+/// A signer's part of a requirement, naming a certificate that signed nothing here.
+private let someSigner = "certificate leaf = H\"00112233445566778899aabbccddeeff00112233\""
 
 // MARK: Nothing unchecked goes into a code-signing requirement
 
 /// An identifier that closes its own quote and adds a clause. In a
-/// requirement "and" binds tighter than "or", so the signer's part would
+/// requirement "and" binds tighter than "or", so the someSigner's part would
 /// apply to the second clause only and the first would stand alone.
 private let rewriting = "local.retriever-source.os\" or identifier \"local.retriever-source.os"
 
@@ -26,21 +28,21 @@ private let rewriting = "local.retriever-source.os\" or identifier \"local.retri
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement, let code else { return false }
         return SecStaticCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
-    #expect(satisfies("identifier \"com.apple.ls\" and \(signer)") == false)
-    #expect(satisfies("identifier \"com.apple.ls\" or identifier \"com.apple.ls\" and \(signer)"))
+    #expect(satisfies("identifier \"com.apple.ls\" and \(someSigner)") == false)
+    #expect(satisfies("identifier \"com.apple.ls\" or identifier \"com.apple.ls\" and \(someSigner)"))
 }
 
 @Test(arguments: [rewriting, "a\"b", "a b", "", "a\\b", "caf\u{E9}"])
 func aRequirementIsNotWrittenForTextThatIsNotAnIdentifier(identifier: String) {
     #expect(throws: Signer.Failure.notAnIdentifier(identifier)) {
-        try Signer.requirement(identifier: identifier, cdhash: nil, signer: signer)
+        try Signer.requirement(identifier: identifier, cdhash: nil, signer: someSigner)
     }
 }
 
 @Test(arguments: ["abc", "aabbccddeeff00112233445566778899aabbccdd\" or anchor apple", "aabbccddeeff00112233445566778899aabbccd", "zzbbccddeeff00112233445566778899aabbccdd"])
 func aRequirementIsNotWrittenForTextThatIsNotACodeHash(cdhash: String) {
     #expect(throws: Signer.Failure.notACodeHash(cdhash)) {
-        try Signer.requirement(identifier: "local.retriever-source.os", cdhash: cdhash, signer: signer)
+        try Signer.requirement(identifier: "local.retriever-source.os", cdhash: cdhash, signer: someSigner)
     }
 }
 
@@ -72,6 +74,7 @@ func aRequirementIsNotWrittenForTextThatIsNotACodeHash(cdhash: String) {
 
 // MARK: Which config key an install trusts
 
+/// Two config keys, as PEM: the one taken to be installed, and a different one.
 private let installedKey = P256.Signing.PrivateKey().publicKey.pemRepresentation
 private let otherKey = P256.Signing.PrivateKey().publicKey.pemRepresentation
 
@@ -132,15 +135,17 @@ private final class Folders {
 
     deinit { for folder in [programs, source] { try? FileManager.default.removeItem(at: folder) } }
 
-    func names() -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: programs.path)) ?? []).sorted() }
+    /// What is in the programs folder now, in order.
+    func installedNames() -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: programs.path)) ?? []).sorted() }
 }
 
-private let genuine = Data("genuine program".utf8)
+/// The contents of the one program the stand-in signature check accepts.
+private let genuineProgram = Data("genuine program".utf8)
 
-/// Stands in for reading a signature: only the genuine bytes are "signed".
+/// Stands in for reading a signature: only the genuineProgram bytes are "signed".
 private func inspectingBytes(as identifier: String) -> (String) throws -> Signer.Program {
     { path in
-        guard try Data(contentsOf: URL(fileURLWithPath: path)) == genuine else { throw Signer.Failure.notOurs(path) }
+        guard try Data(contentsOf: URL(fileURLWithPath: path)) == genuineProgram else { throw Signer.Failure.notOurs(path) }
         return Signer.Program(path: path, identifier: identifier, cdhash: "00")
     }
 }
@@ -148,7 +153,7 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
 @Test func whatIsCheckedIsTheCopyInThePlaceOnlyRootCanChange() throws {
     let folders = try Folders()
     let original = folders.source.appendingPathComponent("RetrieverSourceOS")
-    try genuine.write(to: original)
+    try genuineProgram.write(to: original)
     var inspected: [String] = []
     let installed = try Installation.installProgram(from: original.path, into: folders.programs, as: "RetrieverSourceOS",
                                                     expecting: "local.retriever-source.os", owner: nil) { path in
@@ -158,15 +163,15 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
     #expect(inspected.count == 1)
     #expect(inspected[0].hasPrefix(folders.programs.path))
     #expect(installed == folders.programs.appendingPathComponent("RetrieverSourceOS").path)
-    #expect(try Data(contentsOf: URL(fileURLWithPath: installed)) == genuine)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: installed)) == genuineProgram)
     #expect(FileManager.default.isExecutableFile(atPath: installed))
-    #expect(folders.names() == ["RetrieverSourceOS"])
+    #expect(folders.installedNames() == ["RetrieverSourceOS"])
 }
 
 @Test func aProgramSwappedAfterItWasLookedAtIsNotInstalled() throws {
     let folders = try Folders()
     let earlier = folders.programs.appendingPathComponent("RetrieverSourceOS")
-    try genuine.write(to: earlier)                       // an earlier, good install
+    try genuineProgram.write(to: earlier)                       // an earlier, good install
     let original = folders.source.appendingPathComponent("RetrieverSourceOS")
     try Data("something else".utf8).write(to: original)  // what is there by the time it is copied
 
@@ -175,26 +180,26 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
                                         expecting: "local.retriever-source.os", owner: nil,
                                         inspect: inspectingBytes(as: "local.retriever-source.os"))
     }
-    #expect(try Data(contentsOf: earlier) == genuine)    // the earlier install stands
-    #expect(folders.names() == ["RetrieverSourceOS"])    // and nothing is left lying beside it
+    #expect(try Data(contentsOf: earlier) == genuineProgram)    // the earlier install stands
+    #expect(folders.installedNames() == ["RetrieverSourceOS"])    // and nothing is left lying beside it
 }
 
 @Test func aProgramSignedAsSomethingElseIsNotInstalledInItsPlace() throws {
     let folders = try Folders()
     let original = folders.source.appendingPathComponent("RetrieverServer")
-    try genuine.write(to: original)
+    try genuineProgram.write(to: original)
     #expect(throws: Installation.ProgramRefusal.signedAs("local.retriever-source.os", expected: "local.retriever-server")) {
         try Installation.installProgram(from: original.path, into: folders.programs, as: "RetrieverServer",
                                         expecting: "local.retriever-server", owner: nil,
                                         inspect: inspectingBytes(as: "local.retriever-source.os"))
     }
-    #expect(folders.names().isEmpty)
+    #expect(folders.installedNames().isEmpty)
 }
 
 @Test func aLinkIsInstalledAsTheProgramItPointsToNotAsALink() throws {
     let folders = try Folders()
     let target = folders.source.appendingPathComponent("the real file")
-    try genuine.write(to: target)
+    try genuineProgram.write(to: target)
     let link = folders.source.appendingPathComponent("RetrieverSourceOS")
     try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
 
@@ -204,7 +209,7 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
     let type = try FileManager.default.attributesOfItem(atPath: installed)[.type] as? FileAttributeType
     #expect(type == .typeRegular)
     try Data("changed afterwards".utf8).write(to: target)
-    #expect(try Data(contentsOf: URL(fileURLWithPath: installed)) == genuine)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: installed)) == genuineProgram)
 }
 
 // MARK: Acting in the account's folder with the account's access
@@ -318,6 +323,7 @@ private final class ConfigFolder {
     deinit { try? FileManager.default.removeItem(at: directory) }
 }
 
+/// A stand-in for the source a module would provide, named as its identifier says.
 private func source(for module: ModuleConfig.Module) -> Source {
     FixedSource(name: String(module.identifier.dropFirst(Signer.moduleIdentifierPrefix.count)), schema: ["type": "string"])
 }

@@ -4,51 +4,56 @@ import Testing
 @testable import RetrieverServer
 @testable import RetrieverSourceKit
 
-private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
+/// The transport key the tests' server holds.
+private let transportKey = SymmetricKey(data: Data(repeating: 7, count: 32))
+/// The moment the tests take to be the present.
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-private func sealed(_ plaintext: String, key: SymmetricKey = key, context: Data = Wire.requestAuthenticatedData(Wire.retrievePath)) throws -> Data {
-    try ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: context).combined
+/// A request body: this plaintext sealed as a client would seal it, by default with the right key for /retrieve.
+private func sealedRequest(_ plaintext: String, key: SymmetricKey = transportKey,
+                           authenticatedData: Data = Wire.requestAuthenticatedData(Wire.retrievePath)) throws -> Data {
+    try ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: authenticatedData).combined
 }
 
-private func request(ts: Int, id: String = "abc123") -> String {
-    #"{"timestamp": \#(ts), "request_id": "\#(id)"}"#
+/// The plaintext of a well-formed request sent at `timestamp`, in seconds since 1970.
+private func requestPlaintext(timestamp: Int, id: String = "abc123") -> String {
+    #"{"timestamp": \#(timestamp), "request_id": "\#(id)"}"#
 }
 
 @Test func opensAnAuthenticRequest() throws {
-    let body = try sealed(request(ts: 1_800_000_000))
-    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now).id == "abc123")
+    let body = try sealedRequest(requestPlaintext(timestamp: 1_800_000_000))
+    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now).id == "abc123")
 }
 
 @Test(arguments: [-60, 60]) func acceptsTimestampsWithinTheWindow(offset: Int) throws {
-    let body = try sealed(request(ts: 1_800_000_000 + offset))
-    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now).id == "abc123")
+    let body = try sealedRequest(requestPlaintext(timestamp: 1_800_000_000 + offset))
+    #expect(try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now).id == "abc123")
 }
 
 @Test(arguments: [-61, 61, -86_400]) func refusesStaleTimestamps(offset: Int) throws {
-    let body = try sealed(request(ts: 1_800_000_000 + offset))
-    #expect(throws: Wire.Failure.stale) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
+    let body = try sealedRequest(requestPlaintext(timestamp: 1_800_000_000 + offset))
+    #expect(throws: Wire.Failure.stale) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
 }
 
 @Test func refusesAnotherKey() throws {
-    let body = try sealed(request(ts: 1_800_000_000), key: SymmetricKey(data: Data(repeating: 8, count: 32)))
-    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
+    let body = try sealedRequest(requestPlaintext(timestamp: 1_800_000_000), key: SymmetricKey(data: Data(repeating: 8, count: 32)))
+    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
 }
 
 @Test func refusesAResponseReplayedAsARequest() throws {
-    let body = try sealed(request(ts: 1_800_000_000), context: Wire.responseAuthenticatedData(Wire.retrievePath))
-    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
+    let body = try sealedRequest(requestPlaintext(timestamp: 1_800_000_000), authenticatedData: Wire.responseAuthenticatedData(Wire.retrievePath))
+    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
 }
 
 @Test func refusesATamperedRequest() throws {
-    var body = try sealed(request(ts: 1_800_000_000))
+    var body = try sealedRequest(requestPlaintext(timestamp: 1_800_000_000))
     body[body.count / 2] ^= 1
-    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
+    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
 }
 
 @Test(arguments: [Data(), Data(repeating: 0, count: 27), Data("GET /reminders".utf8)])
 func refusesBodiesThatAreNotMessages(body: Data) {
-    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
+    #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
 }
 
 @Test(arguments: [
@@ -59,22 +64,22 @@ func refusesBodiesThatAreNotMessages(body: Data) {
     #"{"timestamp": 1800000000, "request_id": "\#(String(repeating: "x", count: 65))"}"#,
 ])
 func refusesAuthenticButMalformedRequests(plaintext: String) throws {
-    let body = try sealed(plaintext)
-    #expect(throws: Wire.Failure.malformed) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
+    let body = try sealedRequest(plaintext)
+    #expect(throws: Wire.Failure.malformed) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
 }
 
 @Test func sealsAResponseThatEchoesTheID() throws {
     let values = ["reminders": ["count": 2]]
-    let body = try Wire.seal(response: values, id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: key)
-    let plain = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseAuthenticatedData(Wire.retrievePath))
+    let body = try Wire.seal(response: values, id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: transportKey)
+    let plain = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: transportKey, authenticating: Wire.responseAuthenticatedData(Wire.retrievePath))
     let decoded = try JSONDecoder().decode([String: AnyDecodable].self, from: plain)
     #expect(decoded["request_id"] == .string("abc123"))
     #expect(decoded["data"] == .object(["reminders": .object(["count": .int(2)])]))
 }
 
 @Test func usesAFreshNonceForEveryResponse() throws {
-    let first = try Wire.seal(response: ["a": 1], id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: key)
-    let second = try Wire.seal(response: ["a": 1], id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: key)
+    let first = try Wire.seal(response: ["a": 1], id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: transportKey)
+    let second = try Wire.seal(response: ["a": 1], id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: transportKey)
     #expect(first.prefix(12) != second.prefix(12))
     #expect(first != second)
 }
@@ -91,7 +96,8 @@ func refusesAuthenticButMalformedRequests(plaintext: String) throws {
 // tests/vectors.json holds messages sealed by each side for the other to
 // open. The plugin's tests read the same file.
 
-private struct Vectors: Decodable {
+/// The shared file of messages, read as the plugin's tests read it.
+private struct InteropVectors: Decodable {
     struct RequestVector: Decodable {
         let timestamp: Int
         let requestID: String
@@ -112,25 +118,28 @@ private struct Vectors: Decodable {
     let requests_from_plugin: [String: RequestVector]    // by path
     let responses_from_server: [String: ResponseVector]  // by path
 
-    static func load() throws -> Vectors {
+    /// Reads tests/vectors.json from the repository this file is in.
+    static func load() throws -> InteropVectors {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("tests/vectors.json")
-        return try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url))
+        return try JSONDecoder().decode(InteropVectors.self, from: Data(contentsOf: url))
     }
 
+    /// The server's vector for an endpoint, and the response inside it once opened with the vectors' key.
     func opened<Values: Codable>(_ path: String, as type: Values.Type) throws -> (ResponseVector, Wire.Response<Values>) {
         let response = try #require(responses_from_server[path])
-        let key = try #require(Wire.transportKey(base64: self.key))
+        let transportKey = try #require(Wire.transportKey(base64: self.key))
         let box = try ChaChaPoly.SealedBox(combined: bytes(hex: response.body))
-        let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(path))
+        let plain = try ChaChaPoly.open(box, using: transportKey, authenticating: Wire.responseAuthenticatedData(path))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (response, try decoder.decode(Wire.Response<Values>.self, from: plain))
     }
 }
 
+/// The bytes that a string of hexadecimal digit pairs spells out.
 private func bytes(hex: String) -> Data {
     var data = Data()
     var index = hex.startIndex
@@ -143,20 +152,20 @@ private func bytes(hex: String) -> Data {
 }
 
 @Test(arguments: Wire.endpointPaths) func opensARequestSealedByThePlugin(path: String) throws {
-    let vectors = try Vectors.load()
+    let vectors = try InteropVectors.load()
     let request = try #require(vectors.requests_from_plugin[path])
-    let key = try #require(Wire.transportKey(base64: vectors.key))
-    let at = Date(timeIntervalSince1970: TimeInterval(request.timestamp))
-    #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: key, now: at).id == request.requestID)
+    let transportKey = try #require(Wire.transportKey(base64: vectors.key))
+    let sentAt = Date(timeIntervalSince1970: TimeInterval(request.timestamp))
+    #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: transportKey, now: sentAt).id == request.requestID)
     for other in Wire.endpointPaths where other != path {
         #expect(throws: Wire.Failure.unauthenticated) {
-            try Wire.open(request: bytes(hex: request.body), path: other, key: key, now: at)
+            try Wire.open(request: bytes(hex: request.body), path: other, key: transportKey, now: sentAt)
         }
     }
 }
 
 @Test func retrieveResponseVectorIsWhatTheServerSeals() throws {
-    let (vector, decoded) = try Vectors.load().opened(Wire.retrievePath, as: [String: Entry].self)
+    let (vector, decoded) = try InteropVectors.load().opened(Wire.retrievePath, as: [String: Entry].self)
     #expect(decoded.id == vector.requestID)
     #expect(decoded.configFingerprint == vector.configFingerprint)
     #expect(decoded.configFingerprint == SourceConfig(sources: vectorSources).fingerprint)
@@ -164,7 +173,7 @@ private func bytes(hex: String) -> Data {
 }
 
 @Test func serverResponseVectorIsTheStandInInfo() throws {
-    let (vector, decoded) = try Vectors.load().opened(Wire.serverInfoPath, as: [String: JSON].self)
+    let (vector, decoded) = try InteropVectors.load().opened(Wire.serverInfoPath, as: [String: JSON].self)
     #expect(decoded.id == vector.requestID)
     #expect(decoded.configFingerprint == SourceConfig(sources: vectorSources).fingerprint)
     #expect(decoded.data == vectorServerInfo)
@@ -173,7 +182,7 @@ private func bytes(hex: String) -> Data {
 /// The vectors come from `vectorSources`, not the server's own sources, so
 /// this fails only when the wire format or those stand-ins change.
 @Test func configResponseVectorIsTheStandInConfig() throws {
-    let (vector, decoded) = try Vectors.load().opened(Wire.configPath, as: [String: JSON].self)
+    let (vector, decoded) = try InteropVectors.load().opened(Wire.configPath, as: [String: JSON].self)
     #expect(decoded.id == vector.requestID)
     #expect(decoded.configFingerprint == vector.configFingerprint)
     let config = SourceConfig(sources: vectorSources)
@@ -212,12 +221,12 @@ func writesTheServersHalfOfTheVectors() throws {
     let contents = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
     var file = try #require(contents as? [String: Any])
     let encodedKey = try #require(file["key"] as? String)
-    let key = try #require(Wire.transportKey(base64: encodedKey))
+    let transportKey = try #require(Wire.transportKey(base64: encodedKey))
     let requestID = "00112233445566778899aabbccddeeff"
     let config = SourceConfig(sources: vectorSources)
 
     func vector<Values: Codable>(_ path: String, _ data: Values) throws -> [String: Any] {
-        let body = try Wire.seal(response: data, id: requestID, configFingerprint: config.fingerprint, path: path, key: key)
+        let body = try Wire.seal(response: data, id: requestID, configFingerprint: config.fingerprint, path: path, key: transportKey)
         return ["request_id": requestID, "config_fingerprint": config.fingerprint,
                 "body": body.map { String(format: "%02x", $0) }.joined(),
                 "data": try JSONSerialization.jsonObject(with: JSONEncoder().encode(data))]
