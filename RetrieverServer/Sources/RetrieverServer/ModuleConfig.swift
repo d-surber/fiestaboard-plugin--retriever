@@ -111,8 +111,103 @@ enum ConfigStore {
             return .invalid("module config signature is not valid")
         }
         guard let decoded = ModuleConfig.decode(config) else { return .invalid("module config is unreadable") }
+        if let problem = problem(withModules: decoded.modules) { return .invalid(problem) }
         guard decoded.expires > now else { return .invalid("module config expired") }
         return .valid(decoded)
+    }
+
+    /// What is wrong with the modules a config lists, or nil: the first
+    /// module with a problem of its own, or one listed twice. Two entries
+    /// for one module would be two sources of one name.
+    static func problem(withModules modules: [ModuleConfig.Module]) -> String? {
+        if let problem = modules.lazy.compactMap(problem(with:)).first { return problem }
+        var listed = Set<String>()
+        for module in modules where !listed.insert(module.identifier).inserted {
+            return "module config lists \(module.identifier) twice"
+        }
+        return nil
+    }
+
+    /// What is wrong with a module as a config lists it, or nil. Its
+    /// identifier and code hash are written into a code-signing requirement,
+    /// so neither may be anything but what it claims to be; and its source
+    /// may not have a name the plugin keeps for itself.
+    static func problem(with module: ModuleConfig.Module) -> String? {
+        guard Signer.isModuleIdentifier(module.identifier) else {
+            return "module config lists \"\(module.identifier)\", which is not a module's identifier"
+        }
+        let sourceName = String(module.identifier.dropFirst(Signer.moduleIdentifierPrefix.count))
+        guard !Wire.reservedSourceNames.contains(sourceName) else {
+            return "module config lists \(module.identifier), whose source would be named \"\(sourceName)\", a name the plugin keeps for itself"
+        }
+        if let cdhash = module.cdhash, !Signer.isCodeHash(cdhash) {
+            return "module config pins \(module.identifier) to \"\(cdhash)\", which is not a code hash"
+        }
+        return nil
+    }
+
+    /// A short form of a config key for a person to compare: the first 16
+    /// hexadecimal digits of the SHA-256 of the public key, in fours. Nil if
+    /// `pem` is not a P-256 public key.
+    static func keyFingerprint(pem: String) -> String? {
+        guard let key = try? P256.Signing.PublicKey(pemRepresentation: pem) else { return nil }
+        let digits = SHA256.hash(data: key.x963Representation).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return stride(from: 0, to: 16, by: 4).map { start in
+            String(digits[digits.index(digits.startIndex, offsetBy: start)..<digits.index(digits.startIndex, offsetBy: start + 4)])
+        }.joined(separator: " ")
+    }
+
+    /// Which key a config being installed must verify against, and whether
+    /// that key is to be installed with it.
+    enum KeyToTrust: Equatable {
+        case builtIn(String)        // the server's own; nothing on disk counts
+        case installed(String)      // the one already installed, kept
+        case first(String)          // none was installed; this one comes with the config
+        case replacement(String)    // a different one, asked for by name
+
+        var pem: String {
+            switch self {
+            case .builtIn(let pem), .installed(let pem), .first(let pem), .replacement(let pem): return pem
+            }
+        }
+
+        var isInstalledWithTheConfig: Bool {
+            switch self {
+            case .first, .replacement: return true
+            case .builtIn, .installed: return false
+            }
+        }
+    }
+
+    enum KeyRefusal: Error, Equatable {
+        case noKey
+        case differentKey   // the config comes with a key that is not the installed one
+    }
+
+    /// Decides which key a waiting config is checked against.
+    ///
+    /// The installed key is what makes a config trustworthy, so a config
+    /// never brings a different key in with it unless the administrator
+    /// says so. Otherwise anything able to write the waiting files could
+    /// have its own key, and so its own list of modules, installed.
+    /// - Parameters:
+    ///   - waiting: the key waiting beside the config, if any.
+    ///   - replacingKey: the administrator asked for the key to be changed.
+    static func keyToTrust(builtIn: String?, installed: String?, waiting: String?, replacingKey: Bool) throws -> KeyToTrust {
+        if let builtIn { return .builtIn(builtIn) }
+        guard let installed else {
+            guard let waiting else { throw KeyRefusal.noKey }
+            return .first(waiting)
+        }
+        guard let waiting, !isSameKey(installed, waiting) else { return .installed(installed) }
+        guard replacingKey else { throw KeyRefusal.differentKey }
+        return .replacement(waiting)
+    }
+
+    private static func isSameKey(_ first: String, _ second: String) -> Bool {
+        guard let one = try? P256.Signing.PublicKey(pemRepresentation: first),
+              let other = try? P256.Signing.PublicKey(pemRepresentation: second) else { return first == second }
+        return one.rawRepresentation == other.rawRepresentation
     }
 
     static func load(from directory: URL, builtInKey: String?, now: Date) -> ConfigVerdict {

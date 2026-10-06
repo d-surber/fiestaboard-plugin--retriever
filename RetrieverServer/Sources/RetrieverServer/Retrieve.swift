@@ -3,9 +3,11 @@ import RetrieverSourceKit
 
 /// Asks every source for its data and calls `done`, on `queue`, with an entry
 /// for each. A source that has not answered within `timeout` is reported as
-/// such, so one slow source cannot hold up the others.
+/// such, so one slow source cannot hold up the others. Of two sources with
+/// one name, the first to answer is the one reported.
 func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQueue = .main, _ done: @escaping ([String: Entry]) -> Void) {
     var entries: [String: Entry] = [:]   // only touched on `queue`
+    let namesToHearFrom = Set(sources.map(\.name)).count
     var finished = false
     func finish() {
         guard !finished else { return }
@@ -22,7 +24,7 @@ func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQ
                 queue.async {
                     guard !finished, entries[source.name] == nil else { return }
                     entries[source.name] = entry
-                    if entries.count == sources.count { finish() }
+                    if entries.count == namesToHearFrom { finish() }
                 }
             }
         }

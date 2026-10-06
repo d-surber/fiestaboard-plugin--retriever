@@ -21,7 +21,7 @@ enum ConfigCommand {
             case "sign": try sign(rest)
             case "add": try add(rest)
             case "remove": try remove(rest)
-            case "install": try install()
+            case "install": try install(rest)
             default: throw Problem("Unknown config command. See: \"\(program)\" help")
             }
         } catch {
@@ -41,10 +41,11 @@ enum ConfigCommand {
 
     // MARK: sign
 
-    /// `--days N` and `--pin`, and whatever else was given.
+    /// `--days N`, `--pin` and `--replace-key`, and whatever else was given.
     struct Options: Equatable {
         var days = Int(ModuleConfig.validity / 86400)
         var pin = false
+        var replaceKey = false
         var names: [String] = []
 
         init(_ arguments: [String]) throws {
@@ -56,6 +57,8 @@ enum ConfigCommand {
                     days = value
                 case "--pin":
                     pin = true
+                case "--replace-key":
+                    replaceKey = true
                 default:
                     names.append(argument)
                 }
@@ -77,6 +80,7 @@ enum ConfigCommand {
     static func sign(_ arguments: [String]) throws {
         let options = try Options(arguments)
         var modules = options.names.map { ModuleConfig.Module(identifier: $0) }
+        if let problem = ConfigStore.problem(withModules: modules) { throw Problem("Not signed: \(problem).") }
         if modules.isEmpty { modules = installedConfig?.modules ?? [] }
         if modules.isEmpty {
             modules = Installation.modules(in: Installation.programs).accepted.map { ModuleConfig.Module(identifier: $0.identifier) }
@@ -133,8 +137,10 @@ enum ConfigCommand {
             print("  \(module.identifier)" + (module.cdhash.map { ", only the build \($0)" } ?? ""))
         }
 
+        if let problem = ConfigStore.problem(withModules: modules) { throw Problem("Not signed: \(problem).") }
         let (key, blob, created) = try configKey(pending: pending)
         if created { print("Created a config key in this Mac's Secure Enclave.") }
+        print("Config key: \(ConfigStore.keyFingerprint(pem: key.publicKey.pemRepresentation) ?? "unreadable")")
         print("Signing: approve with Touch ID or your password.")
         let signature = try key.signature(for: bytes)
 
@@ -173,36 +179,74 @@ enum ConfigCommand {
 
     // MARK: install
 
-    static func install() throws {
+    /// config install: check the config waiting in the invoking account's
+    /// folder and put it where the server reads it.
+    static func install(_ arguments: [String]) throws {
+        let options = try Options(arguments)
         guard getuid() == 0 else { throw Problem("Installing needs an administrator: sudo \"\(program)\" config install") }
-        guard let user = ProcessInfo.processInfo.environment["SUDO_USER"], let entry = getpwnam(user) else {
+        guard let account = InvokingAccount.fromSudo() else {
             throw Problem("Run this with sudo from your own account, so the waiting config can be found.")
         }
-        let pending = ConfigStore.pending(home: URL(fileURLWithPath: String(cString: entry.pointee.pw_dir), isDirectory: true))
-        func waiting(_ name: String) -> Data? { try? Data(contentsOf: pending.appendingPathComponent(name)) }
+        let pending = ConfigStore.pending(home: account.home)
 
-        // The key the config must verify against: one built into the server
-        // wins; otherwise the one being installed with it, or already installed.
-        let waitingKey = waiting(ConfigStore.publicKeyFile).map { String(decoding: $0, as: UTF8.self) }
-        let trusted = ConfigStore.builtInKey() ?? waitingKey ?? ConfigStore.trustedKey(in: ConfigStore.installed, builtIn: nil)?.pem
-        let verdict = ConfigStore.verify(config: waiting(ConfigStore.configFile), signature: waiting(ConfigStore.signatureFile),
-                                         publicKeyPEM: trusted, now: Date())
+        // Each waiting file is read once, with the account's own access, and
+        // what is checked is what is installed.
+        let waiting = try account.withItsAccess {
+            Dictionary(uniqueKeysWithValues: ConfigStore.files.compactMap { name in
+                (try? Data(contentsOf: pending.appendingPathComponent(name))).map { (name, $0) }
+            })
+        }
+        let waitingKey = waiting[ConfigStore.publicKeyFile].map { String(decoding: $0, as: UTF8.self) }
+        let installedKey = try? String(contentsOf: ConfigStore.installed.appendingPathComponent(ConfigStore.publicKeyFile), encoding: .utf8)
+
+        let key: ConfigStore.KeyToTrust
+        do {
+            key = try ConfigStore.keyToTrust(builtIn: ConfigStore.builtInKey(), installed: installedKey, waiting: waitingKey,
+                                             replacingKey: options.replaceKey)
+        } catch ConfigStore.KeyRefusal.differentKey {
+            throw Problem("""
+                Not installed: the waiting config comes with config key \(waitingKey.flatMap(ConfigStore.keyFingerprint) ?? "unreadable"),
+                which is not the installed one, \(installedKey.flatMap(ConfigStore.keyFingerprint) ?? "unreadable").
+                If you mean to change the config key: sudo "\(program)" config install --replace-key
+                """)
+        } catch {
+            throw Problem("Not installed: no config key (looked in \(pending.path)).")
+        }
+        let verdict = ConfigStore.verify(config: waiting[ConfigStore.configFile], signature: waiting[ConfigStore.signatureFile],
+                                         publicKeyPEM: key.pem, now: Date())
         guard case .valid(let config) = verdict else {
             if case .invalid(let reason) = verdict { throw Problem("Not installed: \(reason) (looked in \(pending.path)).") }
             throw Problem("Not installed.")
         }
 
+        // The key and its enclave blob go in only when the key is new here.
+        var installing = [ConfigStore.configFile, ConfigStore.signatureFile]
+        if key.isInstalledWithTheConfig { installing += [ConfigStore.publicKeyFile, ConfigStore.keyBlobFile] }
+
         let files = FileManager.default
         try files.createDirectory(at: ConfigStore.installed, withIntermediateDirectories: true)
         try files.setAttributes([.ownerAccountID: 0, .groupOwnerAccountID: 0, .posixPermissions: 0o755], ofItemAtPath: ConfigStore.installed.path)
-        for name in ConfigStore.files {
-            guard let data = waiting(name) else { continue }
+        for name in installing {
+            guard let data = waiting[name] else { continue }
             let destination = ConfigStore.installed.appendingPathComponent(name)
             try data.write(to: destination, options: .atomic)
             try files.setAttributes([.ownerAccountID: 0, .groupOwnerAccountID: 0, .posixPermissions: 0o644], ofItemAtPath: destination.path)
-            try? files.removeItem(at: pending.appendingPathComponent(name))
         }
-        print("Installed module config version \(config.version) in \(ConfigStore.installed.path).")
+        try account.withItsAccess {
+            for name in waiting.keys { try? files.removeItem(at: pending.appendingPathComponent(name)) }
+        }
+
+        print("Installed module config version \(config.version) in \(ConfigStore.installed.path). It allows:")
+        if config.modules.isEmpty { print("  no modules") }
+        for module in config.modules {
+            print("  \(module.identifier)" + (module.cdhash.map { ", only the build \($0)" } ?? ""))
+        }
+        let fingerprint = ConfigStore.keyFingerprint(pem: key.pem) ?? "unreadable"
+        switch key {
+        case .first: print("Its config key, \(fingerprint), is now the one this Mac trusts. It should be the one shown when you signed.")
+        case .replacement: print("The config key was replaced. This Mac now trusts \(fingerprint).")
+        case .installed, .builtIn: break
+        }
         print("It expires in \(config.daysRemaining(now: Date())) days. The server picks it up within a minute.")
     }
 

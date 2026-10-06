@@ -1,3 +1,4 @@
+import Foundation
 import RetrieverSourceKit
 
 // The sources this server serves. The core knows nothing else about them.
@@ -11,13 +12,20 @@ let builtInSources: [Source] = []
 /// programs, each named by its signing identifier, which is also its XPC
 /// service. A module that is missing, or whose signature is not the server's
 /// signer's, is left out and the reason logged.
+///
+/// All are asked at once, so this takes as long as the slowest and no
+/// longer: at most the time a module is given to describe itself.
 func connectModules(_ modules: [ModuleConfig.Module]) -> [Source] {
-    modules.compactMap { module in
+    var reached = [Source?](repeating: nil, count: modules.count)
+    let lock = NSLock()
+    DispatchQueue.concurrentPerform(iterations: modules.count) { position in
+        let module = modules[position]
         do {
-            return try RemoteSource(service: module.identifier, cdhash: module.cdhash)
+            let source = try RemoteSource(service: module.identifier, cdhash: module.cdhash)
+            lock.withLock { reached[position] = source }
         } catch {
             log("\(module.identifier): \(error)")
-            return nil
         }
     }
+    return reached.compactMap { $0 }
 }

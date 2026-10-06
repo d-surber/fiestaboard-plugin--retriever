@@ -12,7 +12,7 @@ enum Installation {
     static let launchAgents = URL(fileURLWithPath: "/Library/LaunchAgents", isDirectory: true)
     static let serverName = "RetrieverServer"
     static let modulePrefix = "RetrieverSource"
-    static let moduleIdentifierPrefix = "local.retriever-source."
+    static let moduleIdentifierPrefix = Signer.moduleIdentifierPrefix
 
     /// The key shared with the plugin: base64 of 32 bytes, readable only by its owner.
     static func transportKeyFile(home: URL) -> URL {
@@ -64,6 +64,57 @@ enum Installation {
             }
         }
         return (accepted, refused)
+    }
+
+    enum ProgramRefusal: Error, CustomStringConvertible, Equatable {
+        case notSignedByThisSigner(String)
+        case signedAs(String, expected: String)
+
+        var description: String {
+            switch self {
+            case .notSignedByThisSigner(let name): return "\(name) is not signed by this server's signer"
+            case .signedAs(let found, let expected): return "it is signed as \"\(found)\", not as \"\(expected)\""
+            }
+        }
+    }
+
+    /// Copies a program into `directory` and checks the copy before it
+    /// replaces anything.
+    ///
+    /// The source is somewhere its owner can still write. So what is checked
+    /// is the copy, already in the directory only root can change, and never
+    /// the file it came from: a program swapped after an earlier look at it
+    /// fails here. The copy is of the file's bytes, so a link is never
+    /// installed as a link to somewhere else.
+    /// - Parameters:
+    ///   - identifier: the signing identifier the installed program must have.
+    ///   - owner: who is to own it; nil leaves it the caller's, for tests.
+    ///   - inspect: reads a program's signature, refusing any not signed by this program's signer.
+    /// - Returns: the installed program's path.
+    /// - Throws: `ProgramRefusal` if the copy does not check, leaving `directory` as it was; or a file error.
+    static func installProgram(from source: String, into directory: URL, as name: String, expecting identifier: String,
+                               owner: (uid: Int, gid: Int)? = (0, 0),
+                               inspect: (String) throws -> Signer.Program = Signer.inspect) throws -> String {
+        let files = FileManager.default
+        let destination = directory.appendingPathComponent(name)
+        let staged = directory.appendingPathComponent(".\(name).new")
+        try? files.removeItem(at: staged)
+        try Data(contentsOf: URL(fileURLWithPath: source)).write(to: staged)
+        do {
+            var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o755]
+            if let owner {
+                attributes[.ownerAccountID] = owner.uid
+                attributes[.groupOwnerAccountID] = owner.gid
+            }
+            try files.setAttributes(attributes, ofItemAtPath: staged.path)
+            guard let copy = try? inspect(staged.path) else { throw ProgramRefusal.notSignedByThisSigner(name) }
+            guard copy.identifier == identifier else { throw ProgramRefusal.signedAs(copy.identifier, expected: identifier) }
+            _ = try files.replaceItemAt(destination, withItemAt: staged)
+        } catch {
+            try? files.removeItem(at: staged)
+            throw error
+        }
+        return destination.path
     }
 
     static func newTransportKey() -> String {

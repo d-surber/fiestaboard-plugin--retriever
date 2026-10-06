@@ -133,11 +133,11 @@ func warnsFromFourteenDaysBeforeExpiry(days: Double, remaining: Int, warning: St
 
 // MARK: Pinning a build
 
-@Test func aModuleCanBePinnedToOneBuild() {
+@Test func aModuleCanBePinnedToOneBuild() throws {
     let signer = "certificate leaf = H\"00112233445566778899aabbccddeeff00112233\""
-    #expect(Signer.requirement(identifier: "local.retriever-source.os", cdhash: nil, signer: signer)
+    #expect(try Signer.requirement(identifier: "local.retriever-source.os", cdhash: nil, signer: signer)
             == "identifier \"local.retriever-source.os\" and \(signer)")
-    let pinned = Signer.requirement(identifier: "local.retriever-source.os", cdhash: "AABBCCDDEEFF00112233445566778899AABBCCDD", signer: signer)
+    let pinned = try Signer.requirement(identifier: "local.retriever-source.os", cdhash: "AABBCCDDEEFF00112233445566778899AABBCCDD", signer: signer)
     #expect(pinned == "identifier \"local.retriever-source.os\" and \(signer) and cdhash H\"aabbccddeeff00112233445566778899aabbccdd\"")
     var requirement: SecRequirement?
     #expect(SecRequirementCreateWithString(pinned as CFString, [], &requirement) == errSecSuccess)

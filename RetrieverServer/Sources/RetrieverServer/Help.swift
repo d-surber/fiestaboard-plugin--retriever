@@ -24,8 +24,9 @@ enum Help {
           sudo ./RetrieverServer install
               Run from the folder holding the server and module programs. Copies
               them to \(Installation.programs.path), owned by root, and sets up the
-              launchd agents in \(Installation.launchAgents.path). Signs nothing: programs not
-              signed by this server's signer are skipped. Makes the transport key
+              launchd agents in \(Installation.launchAgents.path). Signs nothing: each copy
+              is checked once it is there, and one not signed by this server's
+              signer is not installed. Makes the transport key
               if this account has none, and prints it for the plugin's settings.
 
           RetrieverServer config sign
@@ -34,8 +35,12 @@ enum Help {
               key in this Mac's Secure Enclave.
 
           sudo RetrieverServer config install
-              Checks the signed config and puts it where the server reads it. The
-              server picks it up within a minute; no restart is needed.
+              Checks the signed config, puts it where the server reads it, and
+              shows what it allows. The server picks it up within a minute; no
+              restart is needed. The first install also installs the config key,
+              and shows its fingerprint, which should be the one shown at
+              signing. After that a config signed with any other key is refused,
+              unless you add --replace-key to change the key on purpose.
 
         CHANGING WHAT IS ALLOWED  (as yourself, then: sudo RetrieverServer config install)
           RetrieverServer config add <module program or identifier> [--pin]

@@ -14,16 +14,43 @@ public enum Signer {
     public static let serverIdentifier = "local.retriever-server"
 
     /// The signing identifier, and XPC service name, of the module for a source.
-    public static func moduleIdentifier(for name: String) -> String { "local.retriever-source.\(name)" }
+    public static func moduleIdentifier(for name: String) -> String { moduleIdentifierPrefix + name }
 
-    public enum Failure: Error, CustomStringConvertible {
+    /// The start of every module's signing identifier.
+    public static let moduleIdentifierPrefix = "local.retriever-source."
+
+    /// Whether `text` is a module's signing identifier: the prefix, then a
+    /// source name in lower-case letters, digits and hyphens.
+    public static func isModuleIdentifier(_ text: String) -> Bool {
+        guard text.hasPrefix(moduleIdentifierPrefix) else { return false }
+        let name = text.dropFirst(moduleIdentifierPrefix.count)
+        return !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-") }
+    }
+
+    /// Whether `text` can be an identifier in a requirement. A requirement is
+    /// written as text with the identifier between quotes, so one holding a
+    /// quote could rewrite the rest of it, the signer's part included.
+    static func isIdentifier(_ text: String) -> Bool {
+        !text.isEmpty && text.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }
+    }
+
+    /// Whether `text` is a code hash as a requirement writes one: 40 hexadecimal digits.
+    public static func isCodeHash(_ text: String) -> Bool {
+        text.count == 40 && text.allSatisfy { $0.isASCII && $0.isHexDigit }
+    }
+
+    public enum Failure: Error, CustomStringConvertible, Equatable {
         case notSigned
         case notOurs(String)   // a program that is unsigned, or signed by someone else
+        case notAnIdentifier(String)
+        case notACodeHash(String)
 
         public var description: String {
             switch self {
             case .notSigned: return "this program is not signed with an identity"
             case .notOurs(let path): return "\(path) is not signed by this program's signer"
+            case .notAnIdentifier(let text): return "\"\(text)\" cannot be a signing identifier"
+            case .notACodeHash(let text): return "\"\(text)\" is not a code hash"
             }
         }
     }
@@ -55,11 +82,15 @@ public enum Signer {
 
     /// The requirement "signed by my signer, with this identifier", and
     /// optionally "and is exactly the build with this code hash".
+    /// - Throws: `notAnIdentifier` or `notACodeHash` for text that could
+    ///   change what the requirement means; `notSigned` if this program has no signer.
     public static func requirement(identifier: String, cdhash: String? = nil) throws -> String {
-        requirement(identifier: identifier, cdhash: cdhash, signer: try sameSigner())
+        try requirement(identifier: identifier, cdhash: cdhash, signer: try sameSigner())
     }
 
-    static func requirement(identifier: String, cdhash: String?, signer: String) -> String {
+    static func requirement(identifier: String, cdhash: String?, signer: String) throws -> String {
+        guard isIdentifier(identifier) else { throw Failure.notAnIdentifier(identifier) }
+        if let cdhash, !isCodeHash(cdhash) { throw Failure.notACodeHash(cdhash) }
         let build = cdhash.map { " and cdhash H\"\($0.lowercased())\"" } ?? ""
         return "identifier \"\(identifier)\" and \(signer)\(build)"
     }
