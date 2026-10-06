@@ -33,6 +33,16 @@ retriever = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(retriever)
 RetrieverPlugin = retriever.RetrieverPlugin
 
+# Whether FiestaBoard's formula engine gives a result with its type
+# (evaluate_value). One that does not only renders text.
+TYPED = retriever.evaluate_value is not None
+
+
+def number(value):
+    """What a formula gives for a number: the number, or its text from an engine that only renders."""
+    return value if TYPED else str(value)
+
+
 SERVER, CONFIG, RETRIEVE = retriever.SERVER_PATH, retriever.CONFIG_PATH, retriever.RETRIEVE_PATH
 KEY = bytes(range(32))
 KEY_B64 = base64.b64encode(KEY).decode()
@@ -443,11 +453,22 @@ class TestServerInfo:
         server.info = {**SERVER_INFO, "version": "10.0"}
         assert plugin.fetch_data().data["server"]["version"] == "10.0"
 
-    def test_a_source_cannot_take_the_reserved_names(self, plugin, server):
-        server.values = {**VALUES, "server": {"error": "", "data": "impostor"}, "error": {"error": "", "data": "impostor"}}
+    @pytest.mark.parametrize("name", ["error", "server"])
+    def test_a_source_cannot_take_the_reserved_names(self, plugin, server, name):
+        plugin.fetch_data()
+        server.values = {**VALUES, name: {"error": "", "data": "impostor"}}
+        assert_retrieve_failed(plugin.fetch_data(), f"source named {name}: reserved name")
+
+    @pytest.mark.parametrize("name", ["error", "server"])
+    def test_a_config_cannot_list_the_reserved_names(self, plugin, server, name):
+        server.sources = {**SOURCES, name: {"type": "string"}}
+        assert_config_pending(plugin.fetch_data(), f"source named {name}: reserved name")
+
+    def test_server_info_may_use_those_names_itself(self, plugin, server):
+        server.info = {**SERVER_INFO, "error": "none", "server": "this one"}
         data = plugin.fetch_data().data
-        assert data["server"] == SERVER_INFO
         assert data["error"] == ""
+        assert data["server"]["error"] == "none"
 
 
 ITEMS = [
@@ -490,13 +511,13 @@ class TestValues:
         ("definition", "value"),
         [
             ("UPPER(retriever.reminders.data.items[0].title)", "WATER PLANTS"),
-            ("retriever.reminders.data.count + 1", "3"),
+            ("retriever.reminders.data.count + 1", number(3)),
             ('COUNT(retriever.reminders.data.items) & " due"', "2 due"),
             ('IF(retriever.error = "", "ok", retriever.error)', "ok"),
             ('JOIN(retriever.reminders.data.items, ", ", "title")', "water plants, call dentist"),
         ],
     )
-    def test_any_other_definition_is_a_formula_whose_result_is_text(self, definition, value):
+    def test_any_other_definition_is_a_formula(self, definition, value):
         assert retriever.define(rows(("v", definition)), CONTEXT) == {"v": value}
 
     @pytest.mark.parametrize(
@@ -507,12 +528,45 @@ class TestValues:
             ("reminders.data.count", "#REF"),
             ("weather.temperature", "#REF"),
             ("UPPER(retriever.reminders.data.items[9].title)", "#REF"),
-            ("retriever.reminders.data.count +", "#SYNTAX:32"),
+            ("retriever.reminders.data.count +", "#SYNTAX" if TYPED else "#SYNTAX:32"),
         ],
     )
     def test_a_failed_definition_gives_its_default_or_else_the_error_code(self, definition, code):
         assert retriever.define(rows(("v", definition)), CONTEXT) == {"v": code}
         assert retriever.define(rows(("v", definition), default="none"), CONTEXT) == {"v": "none"}
+
+    def test_a_null_is_no_value(self):
+        context = {"retriever": {"s": {"error": "", "data": {"nothing": None, "items": [{"t": None}, {"t": "b"}]}}}}
+        assert retriever.define(rows(("v", "retriever.s.data.nothing"), default="none"), context) == {"v": "none"}
+        assert retriever.define(rows(("v", "retriever.s.data.nothing")), context) == {"v": None}
+        assert retriever.define(rows(("l[x]", "retriever.s.data.items[x].t"), default="-"), context) == {"l": ["-", "b"]}
+        assert retriever.define(rows(("v", "UPPER(retriever.s.data.nothing)"), default="none"), context) == {"v": "none"}
+
+    def test_a_list_that_is_missing_is_an_empty_list_whatever_the_default(self):
+        assert retriever.define(rows(("l[x]", "retriever.nosuch.data[x]"), default="none"), CONTEXT) == {"l": []}
+
+    def test_text_that_reads_like_an_error_is_text(self):
+        """Only an engine that gives types can tell; one that renders text shows the same for both."""
+        context = {"retriever": {"s": {"error": "", "data": {"text": "#REF"}}}}
+        assert retriever.define(rows(("v", "retriever.s.data.text"), default="none"), context) == {"v": "#REF"}
+        formula = rows(("v", 'retriever.s.data.text & ""'), default="none")
+        assert retriever.define(formula, context) == {"v": "#REF" if TYPED else "none"}
+
+    @pytest.mark.skipif(not TYPED, reason="needs an engine that gives a result its type")
+    def test_a_formulas_result_keeps_its_type(self):
+        defined = retriever.define(
+            rows(
+                ("whole", "retriever.reminders.data.count * 3"),
+                ("part", "retriever.reminders.data.count / 4"),
+                ("truth", "retriever.reminders.data.count > 1"),
+                ("text", 'retriever.reminders.data.count & ""'),
+                ("urgent", "FILTER(retriever.reminders.data.items, item.priority > 0)"),
+                ("day", 'DATE("2026-12-25")'),
+            ),
+            CONTEXT,
+        )
+        assert defined == {"whole": 6, "part": 0.5, "truth": True, "text": "2", "urgent": [ITEMS[0]], "day": "2026-12-25 00:00"}
+        assert type(defined["whole"]) is int
 
     def test_a_default_is_not_used_when_the_definition_works(self):
         assert retriever.define(rows(("v", "retriever.reminders.data.count"), default="none"), CONTEXT) == {"v": 2}
@@ -666,7 +720,7 @@ class TestObjects:
     def test_a_field_can_replace_one_the_server_sent(self):
         defined = retriever.define(rows(("reminders.error", '"mine"'), ("reminders.data.count", "retriever.reminders.data.count + 10")), CONTEXT)
         assert defined["reminders"]["error"] == "mine"
-        assert defined["reminders"]["data"] == {"count": "12", "items": ITEMS}
+        assert defined["reminders"]["data"] == {"count": number(12), "items": ITEMS}
 
     def test_a_list_inside_an_object(self):
         defined = retriever.define(rows(("mine.todo[x].what", "retriever.reminders.data.items[x].title")), CONTEXT)
@@ -693,8 +747,8 @@ class TestListParameters:
         )
         assert defined == {
             "todo": [
-                {"line": "1. water plants", "position": "0", "last": ""},
-                {"line": "2. call dentist", "position": "1", "last": "last"},
+                {"line": "1. water plants", "position": number(0), "last": ""},
+                {"line": "2. call dentist", "position": number(1), "last": "last"},
             ]
         }
 
@@ -702,13 +756,13 @@ class TestListParameters:
         defined = retriever.define(
             rows(("todo[row].n", "row + 1"), ("todo[row].what", "retriever.reminders.data.items[row].title")), CONTEXT
         )
-        assert defined == {"todo": [{"n": "1", "what": "water plants"}, {"n": "2", "what": "call dentist"}]}
+        assert defined == {"todo": [{"n": number(1), "what": "water plants"}, {"n": number(2), "what": "call dentist"}]}
 
     def test_a_row_that_indexes_nothing_adds_to_the_elements_the_other_rows_gave(self):
         """Brackets decide how many elements there are; a row without them cannot say."""
         assert retriever.define(rows(("n[x]", "x + 1")), CONTEXT) == {"n": []}
         both = rows(("todo[x].n", "x + 1"), ("todo[x].what", "retriever.reminders.data.items[x].title"))
-        expected = {"todo": [{"what": "water plants", "n": "1"}, {"what": "call dentist", "n": "2"}]}
+        expected = {"todo": [{"what": "water plants", "n": number(1)}, {"what": "call dentist", "n": number(2)}]}
         assert retriever.define(both, CONTEXT) == expected
         assert retriever.define(both[::-1], CONTEXT) == expected  # whichever order the rows are in
 
@@ -760,7 +814,7 @@ class TestListParameters:
         """A definition that is only the parameter is a number, not a path to look up."""
         assert retriever.define(rows(("p[x]", "x")), {"retriever": {}, "x": "wrong"}) == {"p": []}
         defined = retriever.define(rows(("p[x].i", "x"), ("p[x].t", "retriever.tags.data[x]")), CONTEXT)
-        assert defined == {"p": [{"i": "0", "t": "a"}, {"i": "1", "t": "b"}, {"i": "2", "t": "c"}]}
+        assert defined == {"p": [{"i": number(0), "t": "a"}, {"i": number(1), "t": "b"}, {"i": number(2), "t": "c"}]}
 
 
 class TestValueErrors:
@@ -1101,3 +1155,239 @@ class TestManifest:
 
     def test_fetch_fits_inside_fiestaboard_render_timeout(self):
         assert retriever.TIMEOUT_SECONDS < 5
+
+
+
+class TestNeverRaises:
+    """Whatever the server sends and whatever the rows say, a fetch returns and the other values survive."""
+
+    NUMBERS = {"retriever": {"s": {"error": "", "data": {"nan": float("nan"), "inf": float("inf"), "ok": 2, "l": [10, 20, 30]}}}}
+
+    @pytest.mark.parametrize("name", ["nan", "inf"])
+    def test_a_formula_over_a_number_that_is_not_one_is_an_error_value(self, name):
+        both = rows(("bad", f"retriever.s.data.{name} + 1"), ("good", "retriever.s.data.ok + 1"))
+        assert retriever.define(both, self.NUMBERS) == {"bad": "#NUM", "good": number(3)}
+        assert retriever.define(rows(("bad", f"retriever.s.data.{name} + 1"), default="none"), self.NUMBERS) == {"bad": "none"}
+
+    def test_one_bad_element_does_not_spoil_a_list(self):
+        context = {"retriever": {"s": {"error": "", "data": [1, float("nan"), 3]}}}
+        assert retriever.define(rows(("l[x]", "retriever.s.data[x] * 2")), context) == {"l": [number(2), "#NUM", number(6)]}
+
+    def test_an_index_that_is_a_digit_but_not_a_number_leads_nowhere(self):
+        assert retriever.define(rows(("v", "retriever.s.data.l.\u00b2")), self.NUMBERS) == {"v": "#REF"}
+        assert retriever.define(rows(("v", "retriever.s.data.l[\u0662]")), self.NUMBERS) == {"v": 30}
+
+    def test_a_row_that_fails_leaves_the_others_and_the_servers_value(self, monkeypatch):
+        def fails(value):
+            raise RecursionError("too deep")
+
+        monkeypatch.setattr(retriever.copy, "deepcopy", fails)
+        defined = retriever.define(rows(("reminders.extra", '"x"'), ("mine", "retriever.reminders.data.count")), CONTEXT)
+        assert defined == {"mine": 2}
+
+    def test_a_fetch_returns_when_the_engine_raises(self, plugin, server, monkeypatch):
+        def fails(expression, context):
+            raise RuntimeError("engine fell over")
+
+        monkeypatch.setattr(retriever, "evaluate_value" if TYPED else "evaluate", fails)
+        plugin.config = {**plugin.config, "values": rows(("a", "1 + 1"), ("due", "retriever.reminders.data.count"))}
+        data = plugin.fetch_data().data
+        assert data["a"] == "#VALUE"
+        assert data["due"] == 1
+        assert data["error"] == ""
+
+    def test_a_fetch_returns_when_defining_the_values_raises(self, plugin, server, monkeypatch):
+        def fails(rows, context):
+            raise RuntimeError("anything")
+
+        monkeypatch.setattr(retriever, "define", fails)
+        plugin.config = {**plugin.config, "values": rows(("a", "1 + 1"))}
+        assert plugin.fetch_data().data == {**VALUES, "server": SERVER_INFO, "error": ""}
+
+
+class TestDepth:
+    """Names, paths and formulas may go MAX_DEPTH deep and no further."""
+
+    DEEPEST = retriever.MAX_DEPTH
+
+    def brackets(self, depth):
+        return "(" * depth + "1" + ")" * depth
+
+    def test_depth_counts_steps_and_brackets(self):
+        assert retriever.depth_of("retriever.a.b[x].c") == 4
+        assert retriever.depth_of("UPPER(LEFT(retriever.a, 2))") == 2
+        assert retriever.depth_of('"((((" & retriever.a') == 1
+
+    def test_the_limit_itself_is_allowed(self):
+        deep = rows(("a" + ".b" * self.DEEPEST, self.brackets(self.DEEPEST)), ("p[x]", self.brackets(self.DEEPEST - 1) + " & retriever.tags.data[x]"))
+        assert retriever.value_errors(deep) == []
+        defined = retriever.define(deep, CONTEXT)
+        assert defined["p"] == ["1a", "1b", "1c"]
+        value = defined["a"]
+        for _ in range(self.DEEPEST):
+            value = value["b"]
+        assert value == number(1)
+
+    def test_a_name_past_the_limit_is_refused_and_skipped(self):
+        deep = rows(("a" + ".b" * (self.DEEPEST + 1), "1"))
+        assert "steps deep" in retriever.value_errors(deep)[0]
+        assert retriever.define(deep, CONTEXT) == {}
+
+    @pytest.mark.parametrize("depth", [DEEPEST + 1, 250, 5000])
+    def test_a_formula_past_the_limit_is_refused_and_is_an_error_value(self, depth):
+        deep = rows(("v", self.brackets(depth)))
+        assert "deep" in retriever.value_errors(deep)[0]
+        assert retriever.define(deep, CONTEXT) == {"v": "#SYNTAX"}
+        assert retriever.define(rows(("v", self.brackets(depth)), default="none"), CONTEXT) == {"v": "none"}
+
+    def test_a_path_past_the_limit_is_refused(self):
+        deep = rows(("v", "retriever" + ".k" * (self.DEEPEST + 1)))
+        assert "deep" in retriever.value_errors(deep)[0]
+        assert retriever.define(deep, CONTEXT) == {"v": "#SYNTAX"}
+
+
+
+class TestRowsThatDisagree:
+    """Every part of a name is one kind of thing, in every row; found when the settings are saved."""
+
+    @pytest.mark.parametrize(
+        ("pair", "words"),
+        [
+            ((("o.a", '"1"'), ("o.a.b", '"2"')), "o.a is defined both as a single value and as an object"),
+            ((("q[x]", "retriever.tags.data[x]"), ("q[x].f", "retriever.tags.data[x]")), "q[x] is defined both as a single value and as an object"),
+            ((("q[x].f", "retriever.tags.data[x]"), ("q[y]", "retriever.tags.data[y]")), "q[y] is defined both as an object and as a single value"),
+            ((("m.a.b", '"1"'), ("m.a[x]", "retriever.tags.data[x]")), "m.a is defined both as an object and as a list"),
+            ((("a", "1 + 1"), ("a", "2 + 2")), "a is defined twice"),
+            ((("t[x].n", "retriever.tags.data[x]"), ("t[y].n", "retriever.tags.data[y]")), "t[y].n is defined twice"),
+        ],
+    )
+    def test_they_are_refused(self, pair, words):
+        assert any(words in error for error in retriever.value_errors(rows(*pair)))
+
+    def test_rows_that_agree_are_not(self):
+        agree = rows(("o.a.b", '"1"'), ("o.a.c", '"2"'), ("o.d", '"3"'), ("q[x].f", "retriever.tags.data[x]"), ("q[y].g", "retriever.tags.data[y]"))
+        assert retriever.value_errors(agree) == []
+
+
+class TestRowsAgainstTheServer:
+    """A row may add to what the server sends, and may not make an object or a list of what is neither."""
+
+    SHAPES = {
+        "s": {
+            "type": "object",
+            "properties": {
+                "error": {"type": "string"},
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "n": {"type": "integer"},
+                        "names": {"type": "array", "items": {"type": "string"}},
+                        "items": {"type": "array", "items": {"type": "object", "properties": {"t": {"type": "string"}}}},
+                        "loose": {"type": "array"},
+                        "maybe": {"type": ["string", "null"]},
+                        "either": {"type": ["string", "object"]},
+                    },
+                },
+            },
+        },
+        "error": {"type": "string"},
+    }
+
+    @pytest.mark.parametrize(
+        ("name", "words"),
+        [
+            ("s.error.detail", "the server sends s.error as text, which cannot have the field detail"),
+            ("s.data.n.sub", "the server sends s.data.n as a number, which cannot have the field sub"),
+            ("s.data.names[x].len", "the server sends s.data.names[x] as text, which cannot have the field len"),
+            ("s.data[x].t", "the server sends s.data as an object, which cannot have elements"),
+            ("s.data.items.count", "the server sends s.data.items as a list, which cannot have the field count"),
+            ("s.data.maybe.x", "the server sends s.data.maybe as text"),
+            ("error.code", "the server sends error as text"),
+        ],
+    )
+    def test_a_row_that_does_not_fit_is_refused(self, name, words):
+        assert any(words in error for error in retriever.shape_errors(rows((name, '"x"')), self.SHAPES))
+
+    @pytest.mark.parametrize(
+        "name",
+        ["s.extra", "s.error", "s.data.n", "s.data.extra.deep", "s.data.items[x].t", "s.data.items[x].k", "s.data.loose[x].k", "s.data.either.x",
+         "mine.a.b", "s", "s[x].t"],
+    )
+    def test_a_row_that_adds_or_replaces_is_not(self, name):
+        assert retriever.shape_errors(rows((name, '"x"')), self.SHAPES) == []
+
+    def test_the_shape_of_a_value_in_hand(self):
+        assert retriever.shape_of({"name": "S", "protocol": {"min": 1}, "tags": ["a"], "none": None, "on": True}) == {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "protocol": {"type": "object", "properties": {"min": {"type": "number"}}},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "none": {},
+                "on": {"type": "boolean"},
+            },
+        }
+
+
+class TestSavingChecksTheServer:
+    def config(self, server, *pairs):
+        return {"server_url": server.url, "api_key": KEY_B64, "values": rows(*pairs)}
+
+    def test_rows_that_fit_are_saved(self, plugin, server):
+        fit = self.config(server, ("reminders.next", "retriever.reminders.data.items[0].title"), ("mine.count", "retriever.reminders.data.count"), ("server.name", '"renamed"'))
+        assert plugin.validate_config(fit) == []
+        assert server.paths == [SERVER, CONFIG]
+
+    @pytest.mark.parametrize(
+        ("name", "words"),
+        [
+            ("reminders.error.detail", "reminders.error as text"),
+            ("reminders.data.count.x", "reminders.data.count as a number"),
+            ("server.name.x", "server.name as text"),
+            ("server.protocol.min.x", "server.protocol.min as a number"),
+            ("error.code", "error as text"),
+        ],
+    )
+    def test_a_row_that_does_not_fit_what_the_server_sends_is_refused(self, plugin, server, name, words):
+        errors = plugin.validate_config(self.config(server, (name, '"x"')))
+        assert len(errors) == 1
+        assert words in errors[0]
+
+    def test_a_row_that_cannot_be_checked_cannot_be_saved(self, plugin, server):
+        server.refuse(503, "Service Unavailable")
+        errors = plugin.validate_config(self.config(server, ("mine.count", "retriever.reminders.data.count"), ("due", "retriever.reminders.data.count")))
+        assert len(errors) == 1
+        assert "503 Service Unavailable" in errors[0]
+        assert "mine.count" in errors[0]
+        assert "due" not in errors[0].split(":")[-1]
+
+    def test_rows_that_add_to_nothing_do_not_ask_the_server(self, plugin, server):
+        server.refuse(503, "Service Unavailable")
+        plain = self.config(server, ("due", "retriever.reminders.data.count"), ("todo[x].what", "retriever.reminders.data.items[x].title"))
+        assert plugin.validate_config(plain) == []
+        assert server.paths == []
+
+    def test_bad_settings_are_reported_without_asking(self, plugin, server):
+        errors = plugin.validate_config({"server_url": server.url, "api_key": "short", "values": rows(("mine.count", "1"))})
+        assert errors == ["API key must be the base64 of 32 bytes"]
+        assert server.paths == []
+
+
+class TestClashAtRunTime:
+    """What saving could not catch: the server sends something other than it said. Its value stays; the log says so."""
+
+    def test_the_servers_value_is_kept_and_the_row_reported_once(self, caplog):
+        retriever._reported.clear()
+        context = {"retriever": {"s": {"error": "sensor offline", "data": {"n": 5, "names": ["x", "y"], "items": [{"t": "a"}]}}, "error": ""}}
+        clashing = rows(("s.error.detail", '"D"'), ("s.data.n.sub", '"oops"'), ("s.data.names[x].len", "retriever.s.data.names[x]"), ("error.code", '"E1"'), ("mine", "retriever.s.data.n"))
+        with caplog.at_level("WARNING"):
+            assert retriever.define(clashing, context) == {"mine": 5}
+            retriever.define(clashing, context)
+        skipped = [record.message for record in caplog.records if "skipped" in record.message]
+        assert len(skipped) == 4
+        assert "Value 's.error.detail' skipped: s.error is not an object or a list" in skipped[0]
+
+    def test_rows_that_fit_still_add_beside_one_that_does_not(self):
+        context = {"retriever": {"s": {"error": "", "data": {"n": 5, "items": [{"t": "a"}]}}}}
+        defined = retriever.define(rows(("s.data.items[x].k", "x"), ("s.data.n.sub", '"oops"'), ("s.data.extra", '"new"')), context)
+        assert defined == {"s": {"error": "", "data": {"n": 5, "items": [{"t": "a", "k": number(0)}], "extra": "new"}}}

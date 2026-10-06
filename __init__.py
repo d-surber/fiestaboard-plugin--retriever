@@ -16,6 +16,7 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+from datetime import date
 from typing import Any
 
 from cryptography.exceptions import InvalidTag
@@ -31,6 +32,11 @@ except ImportError:  # a FiestaBoard without the plugin-supplied preview
     class PreviewUnavailable(Exception):
         """The plugin cannot supply preview text right now."""
 
+
+try:
+    from src.templates.expressions import ErrorValue, evaluate_value
+except ImportError:  # a FiestaBoard whose formula engine only renders its results as text
+    ErrorValue = evaluate_value = None
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,9 @@ NONCE_BYTES = 12
 PROTOCOLS = (1,)
 
 CONFIG_PENDING = "config pending"
+
+# Names the plugin gives its own values, which a server's source cannot take.
+RESERVED_NAMES = ("error", "server")
 
 # The name the plugin's values go by in templates and in value definitions:
 # {{retriever.reminders.data.count}}. The formula engine resolves a name only
@@ -129,6 +138,13 @@ def open_response(key: bytes, body: bytes, request_id: str, path: str) -> tuple[
     return seq, message["data"]
 
 
+def refuse_reserved(sources: dict[str, Any]) -> None:
+    """Raise if a server names a source by one of the plugin's own names."""
+    taken = [name for name in RESERVED_NAMES if name in sources]
+    if taken:
+        raise ValueError(f"source named {taken[0]}: reserved name")
+
+
 def choose_protocol(server_info: dict[str, Any]) -> int:
     """Return the highest protocol both sides speak. Raises if the server's range is unusable or shares none."""
     offered = server_info.get("protocol")
@@ -181,6 +197,12 @@ def choose_protocol(server_info: dict[str, Any]) -> int:
 # take the name of one of the server's values outright, and then it is the
 # row that templates see.
 
+# How deep a name, a path or a formula may go: this many "." and "[ ]" steps
+# from the root of a name or path to its leaf, and this many brackets inside
+# one another in a formula. The formula engine fails beyond a depth of its
+# own, far past anything a board can show.
+MAX_DEPTH = 32
+
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 _VARIABLE = re.compile(rf"^({_NAME})((?:\[{_NAME}\]|\.{_NAME})*)$")
 _SEGMENT = re.compile(rf"\[({_NAME})\]|\.({_NAME})")
@@ -188,6 +210,8 @@ _PARAMETER = re.compile(rf"\[({_NAME})\]")
 _PATH = re.compile(r"^[A-Za-z_]\w*(?:\.\w+)*$")
 _NUMBER_INDEX = re.compile(r"\[(\d+)\]")
 _ERROR_CODE = re.compile(r"^#(?:REF|VALUE|SYNTAX|NUM|NAME\?|DIV/0)(?::\d+)?$")
+_ANY_PATH = re.compile(r"[A-Za-z_]\w*((?:\.\w+|\[\w+\])+)")
+_STEP = re.compile(r"\.\w+|\[\w+\]")
 _MISSING = object()
 
 # One step into a variable's structure: ("index", parameter) or ("key", field).
@@ -216,13 +240,30 @@ def parse_variable(name: Any) -> tuple[str, list[Step]] | None:
     return match.group(1), steps
 
 
+def depth_of(definition: str) -> int:
+    """How deep a definition goes: the most steps in any path in it, or brackets inside one another."""
+    deepest = max((len(_STEP.findall(match.group(1))) for match in _ANY_PATH.finditer(definition)), default=0)
+    level, quote = 0, ""
+    for character in definition:
+        if quote:
+            quote = "" if character == quote else quote
+        elif character in "\"'":
+            quote = character
+        elif character == "(":
+            level += 1
+            deepest = max(deepest, level)
+        elif character == ")":
+            level -= 1
+    return deepest
+
+
 def resolve(path: str, context: dict[str, Any]) -> Any:
     """Follow a dotted path through *context*; ``_MISSING`` if it leads nowhere."""
     current: Any = context
     for part in path.split("."):
         if isinstance(current, dict) and part in current:
             current = current[part]
-        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+        elif isinstance(current, list) and part.isdecimal() and int(part) < len(current):
             current = current[int(part)]
         else:
             return _MISSING
@@ -234,20 +275,62 @@ def value_of(definition: str, context: dict[str, Any], default: str = "", positi
     The value a definition gives.
 
     A definition that is only a path gives the value there unchanged,
-    whatever its type. Anything else is a formula, whose result is text; in
-    it each of *positions* is a number by its parameter's name. When the path
-    leads nowhere or the formula fails, the result is *default* if there is
-    one, and otherwise the formula engine's error code.
+    whatever its type. Anything else is a formula; in it each of *positions*
+    is a number by its parameter's name. When there is no value (the path
+    leads nowhere or to a null, or the formula fails) the result is *default*
+    if there is one, and otherwise the formula engine's error code, or the
+    null.
+
+    A formula's result keeps its type where FiestaBoard's engine can give it
+    (``evaluate_value``). An older engine only renders text: there a number
+    comes back as text, and an error is known only by what it looks like.
     """
     definition = _NUMBER_INDEX.sub(r".\1", definition.strip())
+    if depth_of(definition) > MAX_DEPTH:
+        return default or "#SYNTAX"
     if _PATH.match(definition) and definition not in (positions or {}):
         found = resolve(definition, context)
-        return found if found is not _MISSING else (default or "#REF")
+        if found is _MISSING:
+            return default or "#REF"
+        return default if found is None and default else found
     if positions:
         bindings = "".join(f"{name}, {position}, " for name, position in positions.items())
         definition = f"LET({bindings}{definition})"
-    result = evaluate(definition, context)
+    if evaluate_value is None:
+        return _rendered(definition, context, default)
+    try:
+        result = evaluate_value(definition, context)
+    except Exception:
+        result = ErrorValue("#VALUE")  # it is not meant to raise; nor was evaluate
+    if isinstance(result, ErrorValue):
+        return default or result.code
+    if result is None and default:
+        return default
+    if isinstance(result, float) and result.is_integer():
+        return int(result)  # the engine counts in floats; 6.0 is 6
+    if isinstance(result, date):
+        return evaluate(definition, context)  # a date or a time, as the engine writes one
+    return result
+
+
+def _rendered(definition: str, context: dict[str, Any], default: str) -> Any:
+    """A formula's value from an engine that only renders text."""
+    try:
+        result = evaluate(definition, context)
+    except Exception:
+        # The engine is documented never to raise, and did: on a number that
+        # is not one (NaN), on an infinity, on a formula too deep for it.
+        result = "#NUM" if _not_a_number(definition, context) else "#VALUE"
     return default if default and _ERROR_CODE.match(result) else result
+
+
+def _not_a_number(definition: str, context: dict[str, Any]) -> bool:
+    """Whether a definition reads a NaN or an infinity, which the formula engine cannot take."""
+    for match in _ANY_PATH.finditer(definition):
+        found = resolve(match.group(0), context)
+        if isinstance(found, float) and (found != found or found in (float("inf"), float("-inf"))):
+            return True
+    return False
 
 
 def list_length(definition: str, parameter: str, context: dict[str, Any]) -> int | None:
@@ -264,18 +347,39 @@ def list_length(definition: str, parameter: str, context: dict[str, Any]) -> int
     return min(lengths, default=None)
 
 
+class _Clash(Exception):
+    """A row would put a field or an element into a value that is neither an object nor a list."""
+
+
 def _build(
-    steps: list[Step], definition: str, context: dict[str, Any], default: str, positions: dict[str, int], existing: Any
+    steps: list[Step],
+    definition: str,
+    context: dict[str, Any],
+    default: str,
+    positions: dict[str, int],
+    existing: Any,
+    where: str,
 ) -> Any:
-    """The value at *steps* into a variable, merged into what earlier rows put there."""
+    """
+    The value at *steps* into a variable, merged into what is already there.
+
+    A row adds a field to an object and an element to a list, and may give a
+    new value to a leaf. It never turns a text, a number or a list into an
+    object, nor anything into a list: that raises ``_Clash`` naming *where*
+    and the row stops there.
+    """
     if not steps:
         return value_of(definition, context, default, positions)
     kind, name = steps[0]
     if kind == "key":
-        fields = existing if isinstance(existing, dict) else {}
-        fields[name] = _build(steps[1:], definition, context, default, positions, fields.get(name))
+        if existing is not None and not isinstance(existing, dict):
+            raise _Clash(where)
+        fields = existing if existing is not None else {}
+        fields[name] = _build(steps[1:], definition, context, default, positions, fields.get(name), f"{where}.{name}")
         return fields
-    elements = existing if isinstance(existing, list) else []
+    if existing is not None and not isinstance(existing, list):
+        raise _Clash(where)
+    elements = existing if existing is not None else []
     length = list_length(definition, name, context)
     # A definition that indexes nothing with this parameter adds to the
     # elements other rows gave; define() runs those rows first.
@@ -289,8 +393,20 @@ def _build(
             default,
             {**positions, name: position},
             elements[position],
+            f"{where}[{position}]",
         )
     return elements
+
+
+# Clashes already written to the log, so that a row that clashes on every
+# fetch is reported once and not every few minutes.
+_reported: set[str] = set()
+
+
+def _report(message: str) -> None:
+    if message not in _reported and len(_reported) < 1000:
+        _reported.add(message)
+        logger.warning(message)
 
 
 def define(rows: Any, context: dict[str, Any]) -> dict[str, Any]:
@@ -318,11 +434,25 @@ def define(rows: Any, context: dict[str, Any]) -> dict[str, Any]:
     # user wrote the rows in never matters.
     defined: dict[str, Any] = {}
     for name, steps, definition, default in sorted(usable, key=lambda row: not says_how_long(row)):
-        # Several rows may each give one part of the same object or list.
+        if len(steps) > MAX_DEPTH:
+            continue
+        # Several rows may each give one part of the same object or list. A
+        # row that adds to one of the server's values adds to a copy of it.
         existing = defined.get(name) if steps else None
-        if existing is None and steps and steps[0][0] == "key" and isinstance(served.get(name), dict):
-            existing = copy.deepcopy(served[name])
-        defined[name] = _build(steps, definition, context, default, {}, existing)
+        try:
+            if existing is None and steps and steps[0][0] == "key" and served.get(name) is not None:
+                existing = copy.deepcopy(served[name])
+            defined[name] = _build(steps, definition, context, default, {}, existing, name)
+        except _Clash as clash:
+            # Saving the settings checks for this against what the server
+            # says it sends; it gets here only if the server sends otherwise.
+            variable = name + "".join(f"[{step}]" if kind == "index" else f".{step}" for kind, step in steps)
+            _report(f"Value {variable!r} skipped: {clash} is not an object or a list that a row can add to")
+        except Exception as error:
+            # One row must not take the others, or the fetch, down with it.
+            logger.warning(f"Value {name!r} could not be worked out: {type(error).__name__}: {error}")
+            if name not in defined and name not in served:
+                defined[name] = default or "#VALUE"
     return defined
 
 
@@ -334,6 +464,7 @@ def value_errors(rows: Any) -> list[str]:
         return ["Values must be a list"]
     errors = []
     kinds: dict[str, str] = {}
+    leaves: set[str] = set()
     shapes = {"": "a single value", "key": "an object", "index": "a list"}
     # For each list, the parameters some row indexes a list with: those have a length.
     sized: set[tuple[str, str]] = set()
@@ -359,9 +490,19 @@ def value_errors(rows: Any) -> list[str]:
         name, steps = parsed
         parameters = [step[1] for step in steps if step[0] == "index"]
         label = f"Value {row['variable'].strip()!r}"
-        kind = steps[0][0] if steps else ""
-        if kinds.setdefault(name, kind) != kind:
-            errors.append(f"{label}: {name} is defined both as {shapes[kinds[name]]} and as {shapes[kind]}")
+        if len(steps) > MAX_DEPTH:
+            errors.append(f"Value {number}: the name goes more than {MAX_DEPTH} steps deep")
+            continue
+        # Every part of a name must be the same kind of thing in every row.
+        key = shown = name
+        for kind, step in [*steps, ("", "")]:
+            if kinds.setdefault(key, kind) != kind:
+                errors.append(f"{label}: {shown} is defined both as {shapes[kinds[key]]} and as {shapes[kind]}")
+                break
+            if kind == "" and key in leaves:
+                errors.append(f"{label}: {shown} is defined twice")
+            key, shown = (f"{key}[]", f"{shown}[{step}]") if kind == "index" else (f"{key}.{step}", f"{shown}.{step}")
+        leaves.add(key[:-1])
         definition = row.get("definition")
         if not isinstance(definition, str) or not definition.strip():
             errors.append(f"{label} has no definition")
@@ -372,11 +513,84 @@ def value_errors(rows: Any) -> list[str]:
                 errors.append(f"{label}: some row for {name} must index a list with [{parameter}], to say how long it is")
         for parameter in sorted(used - set(parameters)):
             errors.append(f"{label}: [{parameter}] in the definition needs [{parameter}] in the name")
+        if depth_of(definition) > MAX_DEPTH:
+            errors.append(f"{label}: the definition goes more than {MAX_DEPTH} steps or brackets deep")
+            continue
         formula = _NUMBER_INDEX.sub(r".\1", _PARAMETER.sub(".0", definition).strip())
         if not _PATH.match(formula):
             bindings = "".join(f"{parameter}, 0, " for parameter in parameters)
             formula = f"LET({bindings}{formula})" if bindings else formula
-            errors.extend(f"{label}: {issue.message}" for issue in validate_expression(formula))
+            try:
+                errors.extend(f"{label}: {issue.message}" for issue in validate_expression(formula))
+            except Exception as error:
+                errors.append(f"{label}: the definition could not be checked ({type(error).__name__})")
+    return errors
+
+
+_KINDS = {"string": "text", "integer": "a number", "number": "a number", "boolean": "true or false", "array": "a list", "object": "an object"}
+
+
+def kind_of(schema: Any) -> str:
+    """What a JSON Schema says a value is, as one of ``_KINDS``; "" if it does not say."""
+    kind = schema.get("type") if isinstance(schema, dict) else None
+    if isinstance(kind, list):
+        kinds = [each for each in kind if each != "null"]
+        kind = kinds[0] if len(kinds) == 1 else None
+    return kind if isinstance(kind, str) and kind in _KINDS else ""
+
+
+def shape_of(value: Any) -> dict[str, Any]:
+    """A JSON Schema for a value in hand, as far as its own shape says."""
+    if isinstance(value, dict):
+        return {"type": "object", "properties": {name: shape_of(item) for name, item in value.items()}}
+    if isinstance(value, list):
+        return {"type": "array", "items": shape_of(value[0])} if value else {"type": "array"}
+    if isinstance(value, bool):
+        return {"type": "boolean"}
+    if isinstance(value, int | float):
+        return {"type": "number"}
+    return {"type": "string"} if isinstance(value, str) else {}
+
+
+def adds_to_something(rows: Any) -> list[str]:
+    """The names of the rows that put a field into an object, which may be one of the server's."""
+    names = []
+    for row in rows if isinstance(rows, list) else []:
+        parsed = parse_variable(row.get("variable")) if isinstance(row, dict) else None
+        if parsed and parsed[1] and parsed[1][0][0] == "key":
+            names.append(row["variable"].strip())
+    return names
+
+
+def shape_errors(rows: Any, shapes: dict[str, Any]) -> list[str]:
+    """
+    Rows that would put a field or an element into something the server sends as neither an object nor a list.
+
+    *shapes* is {name: JSON Schema} for each of the plugin's own values. Where
+    a schema does not say, nothing is wrong. A source that only ever adds to
+    what it sends keeps passing a check it has passed.
+    """
+    errors = []
+    for row in rows if isinstance(rows, list) else []:
+        parsed = parse_variable(row.get("variable")) if isinstance(row, dict) else None
+        if not parsed or not parsed[1] or parsed[1][0][0] != "key" or parsed[0] not in shapes:
+            continue
+        where, schema = parsed[0], shapes[parsed[0]]
+        for kind, step in parsed[1]:
+            sent = kind_of(schema)
+            if not sent:
+                break
+            if sent != ("object" if kind == "key" else "array"):
+                wanted = f"the field {step}" if kind == "key" else "elements"
+                errors.append(f"Value {row['variable'].strip()!r}: the server sends {where} as {_KINDS[sent]}, which cannot have {wanted}")
+                break
+            if kind == "key":
+                properties = schema.get("properties")
+                schema = properties.get(step) if isinstance(properties, dict) else None
+                where = f"{where}.{step}"
+            else:
+                schema = schema.get("items")
+                where = f"{where}[{step}]"
     return errors
 
 
@@ -475,6 +689,7 @@ class RetrieverPlugin(PluginBase):
         config_seq, sources, server_info, protocol = self._server_config
         try:
             seq, values = self._fetch(server_url, RETRIEVE_PATH, key, deadline, protocol)
+            refuse_reserved(values)
         except Exception as e:
             unknown = {name: {"error": "", "data": default_for(schema)} for name, schema in sources.items()}
             return self._failed(server_url, describe(e), {**unknown, "server": server_info})
@@ -496,6 +711,7 @@ class RetrieverPlugin(PluginBase):
         _, server_info = self._fetch(server_url, SERVER_PATH, key, deadline)
         protocol = choose_protocol(server_info)
         seq, sources = self._fetch(server_url, CONFIG_PATH, key, deadline, protocol)
+        refuse_reserved(sources)
         return seq, sources, server_info, protocol
 
     def _failed(self, server_url: str, reason: str, values: dict[str, Any]) -> PluginResult:
@@ -505,7 +721,12 @@ class RetrieverPlugin(PluginBase):
 
     def _variables(self, values: dict[str, Any]) -> dict[str, Any]:
         """The template variables: what the fetch gave, and over it the values the user defines from that."""
-        return {**values, **define(self.config.get("values"), {NAMESPACE: values})}
+        try:
+            return {**values, **define(self.config.get("values"), {NAMESPACE: values})}
+        except Exception as error:
+            # define() guards each row; this is so that fetch_data cannot raise whatever happens there.
+            logger.warning(f"The values could not be worked out: {type(error).__name__}: {error}")
+            return values
 
     def get_preview_text(self) -> str:
         """
@@ -524,6 +745,7 @@ class RetrieverPlugin(PluginBase):
         try:
             _, server_info = self._fetch(server_url, SERVER_PATH, key, deadline)
             _, values = self._fetch(server_url, RETRIEVE_PATH, key, deadline, choose_protocol(server_info))
+            refuse_reserved(values)
         except Exception as e:
             raise PreviewUnavailable(describe(e)) from None
         return json.dumps({NAMESPACE: {**values, "server": server_info, "error": ""}})
@@ -559,7 +781,30 @@ class RetrieverPlugin(PluginBase):
         Returns:
             List of error messages (empty if valid)
         """
-        return self._connection_errors(config) + value_errors(config.get("values"))
+        errors = self._connection_errors(config)
+        rows = config.get("values")
+        if not errors and adds_to_something(rows):
+            errors += self._shape_errors(config, rows)
+        return errors + value_errors(rows)
+
+    def _shape_errors(self, config: dict[str, Any], rows: Any) -> list[str]:
+        """
+        Check the rows that add to an object against what the server says it sends.
+
+        Only the server knows which names are its own and what shape their
+        values have, so this asks it, with the settings being saved. A row
+        that cannot be checked cannot be saved.
+        """
+        server_url = config["server_url"].strip().rstrip("/")
+        key = decode_key(configured_key(config))
+        try:
+            _, sources, server_info, _ = self._read_server(server_url, key, time.monotonic() + TIMEOUT_SECONDS)
+        except Exception as e:
+            names = ", ".join(adds_to_something(rows))
+            return [f"The server did not answer ({describe(e)}), so these values could not be checked against what it sends: {names}"]
+        wrapper = {"type": "object", "properties": {"error": {"type": "string"}}}
+        shapes = {name: {**wrapper, "properties": {**wrapper["properties"], "data": schema}} for name, schema in sources.items()}
+        return shape_errors(rows, {**shapes, "server": shape_of(server_info), "error": {"type": "string"}})
 
     def _connection_errors(self, config: dict[str, Any]) -> list[str]:
         """What stops the plugin reaching its server. Nothing else stops a fetch."""

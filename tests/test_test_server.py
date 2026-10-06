@@ -194,12 +194,14 @@ class TestListRows:
             ],
         }
         first, second, third = data(plugin), data(plugin), data(plugin)
+        # Numbers, or their text from a formula engine that only renders.
+        one, two = (1, 2) if retriever.evaluate_value else ("1", "2")
         assert first["label"] == "FIRST"
         assert first["things"] == [
-            {"title": "a", "n": "1", "parts": ["p", "q"]},
-            {"title": "b", "n": "2", "parts": ["r"]},
+            {"title": "a", "n": one, "parts": ["p", "q"]},
+            {"title": "b", "n": two, "parts": ["r"]},
         ]
-        assert second["things"] == [{"title": "c", "n": "1", "parts": []}]
+        assert second["things"] == [{"title": "c", "n": one, "parts": []}]
         assert third["label"] == "THIRD"
         assert third["things"] == []
 
