@@ -39,6 +39,7 @@ public enum Signer {
         text.count == 40 && text.allSatisfy { $0.isASCII && $0.isHexDigit }
     }
 
+    /// Why a requirement cannot be written, or a program does not meet one.
     public enum Failure: Error, CustomStringConvertible, Equatable {
         case notSigned
         case notOurs(String)   // a program that is unsigned, or signed by someone else
@@ -69,9 +70,9 @@ public enum Signer {
         var information: CFDictionary?
         guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
-              let info = information as? [String: Any],
-              let identifier = info[kSecCodeInfoIdentifier as String] as? String,
-              let unique = info[kSecCodeInfoUnique as String] as? Data
+              let signingInformation = information as? [String: Any],
+              let identifier = signingInformation[kSecCodeInfoIdentifier as String] as? String,
+              let unique = signingInformation[kSecCodeInfoUnique as String] as? Data
         else { throw Failure.notOurs(path) }
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(try Signer.requirement(identifier: identifier) as CFString, [], &requirement) == errSecSuccess,
@@ -103,10 +104,10 @@ public enum Signer {
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
               SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
               SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
-              let info = information as? [String: Any]
+              let signingInformation = information as? [String: Any]
         else { throw Failure.notSigned }
-        return try sameSigner(team: info[kSecCodeInfoTeamIdentifier as String] as? String,
-                              certificates: info[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? [])
+        return try sameSigner(team: signingInformation[kSecCodeInfoTeamIdentifier as String] as? String,
+                              certificates: signingInformation[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? [])
     }
 
     /// A Developer ID is recognised by its team, on a certificate Apple

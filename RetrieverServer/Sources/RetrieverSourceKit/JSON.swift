@@ -1,6 +1,6 @@
 import Foundation
 
-/// A JSON value, for data whose structure is not a Swift type: the schemas in Config.
+/// A JSON value, for data whose structure is not a Swift type: the schemas in SourceConfig.
 public indirect enum JSON: Codable, Equatable {
     case null
     case bool(Bool)

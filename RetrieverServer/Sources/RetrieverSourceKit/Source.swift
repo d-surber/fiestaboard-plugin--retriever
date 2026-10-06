@@ -45,11 +45,13 @@ public extension Source {
         return .null
     }
 
+    /// The entry for data that was read.
     func succeeded<Value: Encodable>(_ value: Value) -> Entry {
         guard let data = JSON(encoding: value) else { return failed("could not be encoded") }
         return Entry(error: "", data: data)
     }
 
+    /// The entry for data that could not be read: the reason, and the schema's default in place of the data.
     func failed(_ reason: String) -> Entry {
         Entry(error: reason, data: defaultData)
     }

@@ -11,20 +11,20 @@ import RetrieverSourceKit
 /// queue: one module that will not answer delays nothing but itself.
 final class ServerState {
     private(set) var sources: [Source] = []
-    private(set) var config = Config(sources: [])
-    private(set) var verdict: ConfigVerdict = .invalid("not loaded")
+    private(set) var sourceConfig = SourceConfig(sources: [])
+    private(set) var verdict: ModuleConfigVerdict = .invalid("not loaded")
 
     /// A module the config lists has not been reached. It is tried again
     /// when a request arrives, not before: nothing needs it sooner.
-    private(set) var incomplete = false
+    private(set) var hasUnreachedModules = false
 
     private let builtIn: [Source]
     private let directory: URL
     private let builtInKey: String?
     private let connect: ([ModuleConfig.Module]) -> [Source]
     private let background: (queue: DispatchQueue, returningTo: DispatchQueue)?
-    private let configSource = ConfigSource()
-    private var seen = ""
+    private let configSource = ModuleConfigSource()
+    private var lastSeen = ""
     private var lastWarning = ""
     /// The modules reached, each with the entry in the config it was reached for.
     private var reached: [(module: ModuleConfig.Module, source: Source)] = []
@@ -54,13 +54,13 @@ final class ServerState {
     /// - Returns: true if what is served had changed by the time this returned.
     @discardableResult
     func refresh(now: Date = Date(), retryingModules: Bool = false, waiting: Bool = false) -> Bool {
-        let latest = ConfigStore.load(from: directory, builtInKey: builtInKey, now: now)
+        let latest = ModuleConfigStore.load(from: directory, builtInKey: builtInKey, now: now)
         warn(latest, now: now)
-        let state = "\(ConfigStore.fingerprint(of: directory))|\(latest)"
-        let configChanged = state != seen
-        guard configChanged || (retryingModules && incomplete) else { return false }
+        let state = "\(ModuleConfigStore.fingerprint(of: directory))|\(latest)"
+        let configChanged = state != lastSeen
+        guard configChanged || (retryingModules && hasUnreachedModules) else { return false }
         if configChanged, case .invalid(let reason) = latest { log("Module config: \(reason); no modules loaded") }
-        seen = state
+        lastSeen = state
         verdict = latest
         configSource.verdict = latest
 
@@ -101,7 +101,7 @@ final class ServerState {
     /// - Returns: true if that changed what is served.
     @discardableResult
     private func serve() -> Bool {
-        incomplete = reached.count < verdict.modules.count
+        hasUnreachedModules = reached.count < verdict.modules.count
         // In the config's order, so that the order modules answered in changes nothing.
         let modules = verdict.modules.compactMap { module in reached.first { $0.module == module }?.source }
         var names = Set<String>()
@@ -110,15 +110,15 @@ final class ServerState {
             if !isFirstOfItsName { log("A second source named \(source.name) is not served") }
             return isFirstOfItsName
         }
-        guard updated.map(\.name) != sources.map(\.name) || Config(sources: updated).seq != config.seq else { return false }
+        guard updated.map(\.name) != sources.map(\.name) || SourceConfig(sources: updated).sequenceNumber != sourceConfig.sequenceNumber else { return false }
         sources = updated
-        config = Config(sources: sources)
-        log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(config.seq)")
+        sourceConfig = SourceConfig(sources: sources)
+        log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(sourceConfig.sequenceNumber)")
         return true
     }
 
     /// One log line a day while the config is within its warning period.
-    private func warn(_ verdict: ConfigVerdict, now: Date) {
+    private func warn(_ verdict: ModuleConfigVerdict, now: Date) {
         guard case .valid(let config) = verdict else { return }
         let warning = config.warning(now: now)
         guard !warning.isEmpty, warning != lastWarning else { return }

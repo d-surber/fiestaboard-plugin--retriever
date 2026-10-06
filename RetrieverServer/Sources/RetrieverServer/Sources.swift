@@ -21,7 +21,7 @@ func connectModules(_ modules: [ModuleConfig.Module]) -> [Source] {
     DispatchQueue.concurrentPerform(iterations: modules.count) { position in
         let module = modules[position]
         do {
-            let source = try RemoteSource(service: module.identifier, cdhash: module.cdhash)
+            let source = try RemoteSource(serviceName: module.identifier, cdhash: module.cdhash)
             lock.withLock { reached[position] = source }
         } catch {
             log("\(module.identifier): \(error)")

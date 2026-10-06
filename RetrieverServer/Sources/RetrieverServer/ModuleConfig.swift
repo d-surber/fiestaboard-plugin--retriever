@@ -16,6 +16,7 @@ import RetrieverSourceKit
 // the module was built by the server's signer (see Signer). The config key
 // says this installation is meant to run it.
 struct ModuleConfig: Codable, Equatable {
+    /// One module the config allows.
     struct Module: Codable, Equatable {
         /// The module's signing identifier, which is also its XPC service name.
         let identifier: String
@@ -28,15 +29,17 @@ struct ModuleConfig: Codable, Equatable {
     var expires: Date
     var modules: [Module]
 
-    static let validity: TimeInterval = 90 * 86400   // how long a signing lasts by default
+    static let defaultValidity: TimeInterval = 90 * 86400   // how long a signing lasts by default
     static let warningDays = 14                      // warn daily from this many days before expiry
 
+    /// Reads a config from the bytes of its file; nil if they are not one.
     static func decode(_ data: Data) -> ModuleConfig? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(ModuleConfig.self, from: data)
     }
 
+    /// The bytes of the config's file, which are what is signed: the same every time for the same config.
     func encoded() -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -58,7 +61,7 @@ struct ModuleConfig: Codable, Equatable {
 }
 
 /// Whether there is a module config the server may act on.
-enum ConfigVerdict: Equatable {
+enum ModuleConfigVerdict: Equatable {
     case valid(ModuleConfig)
     case invalid(String)   // why not
 
@@ -69,18 +72,18 @@ enum ConfigVerdict: Equatable {
 }
 
 /// Where the module config lives, and how it is checked.
-enum ConfigStore {
+enum ModuleConfigStore {
     /// Root-owned, so that replacing the config or its key needs an administrator.
-    static let installed = URL(fileURLWithPath: "/Library/Application Support/Retriever", isDirectory: true)
+    static let installedFolder = URL(fileURLWithPath: "/Library/Application Support/Retriever", isDirectory: true)
 
     static let configFile = "config.json"
     static let signatureFile = "config.sig"
     static let publicKeyFile = "config-key.pub"   // PEM; ignored when a key is built into the server
     static let keyBlobFile = "config-key.blob"    // a Secure Enclave key, usable only on this Mac, if signing is done here
-    static let files = [configFile, signatureFile, publicKeyFile, keyBlobFile]
+    static let fileNames = [configFile, signatureFile, publicKeyFile, keyBlobFile]
 
     /// Where a newly signed config waits to be installed by an administrator.
-    static func pending(home: URL) -> URL {
+    static func pendingFolder(home: URL) -> URL {
         home.appendingPathComponent("Library/Application Support/Retriever/pending", isDirectory: true)
     }
 
@@ -102,7 +105,9 @@ enum ConfigStore {
         return (pem, directory.appendingPathComponent(publicKeyFile).path)
     }
 
-    static func verify(config: Data?, signature: Data?, publicKeyPEM: String?, now: Date) -> ConfigVerdict {
+    /// Decides whether a config may be acted on. The signature is checked over the file's bytes before anything in them is believed.
+    /// - Parameter publicKeyPEM: the key the signature must verify against.
+    static func verify(config: Data?, signature: Data?, publicKeyPEM: String?, now: Date) -> ModuleConfigVerdict {
         guard let publicKeyPEM else { return .invalid("no config key") }
         guard let config else { return .invalid("no module config") }
         guard let signature else { return .invalid("module config is not signed") }
@@ -179,6 +184,7 @@ enum ConfigStore {
         }
     }
 
+    /// Why no key could be chosen for a config being installed.
     enum KeyRefusal: Error, Equatable {
         case noKey
         case differentKey   // the config comes with a key that is not the installed one
@@ -210,7 +216,8 @@ enum ConfigStore {
         return one.rawRepresentation == other.rawRepresentation
     }
 
-    static func load(from directory: URL, builtInKey: String?, now: Date) -> ConfigVerdict {
+    /// Reads the config, its signature and its key from a folder and decides whether it may be acted on.
+    static func load(from directory: URL, builtInKey: String?, now: Date) -> ModuleConfigVerdict {
         verify(config: try? Data(contentsOf: directory.appendingPathComponent(configFile)),
                signature: try? Data(contentsOf: directory.appendingPathComponent(signatureFile)),
                publicKeyPEM: trustedKey(in: directory, builtIn: builtInKey)?.pem,
@@ -219,7 +226,7 @@ enum ConfigStore {
 
     /// Changes when any of the files does, so the server can notice a new config.
     static func fingerprint(of directory: URL) -> String {
-        files.map { name -> String in
+        fileNames.map { name -> String in
             let attributes = try? FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent(name).path)
             let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
             return "\(name):\(modified):\(attributes?[.size] as? Int ?? -1)"
@@ -229,7 +236,8 @@ enum ConfigStore {
 
 /// The module config's own state, served like any source so that a page can
 /// show an approaching expiry: {{retriever.module_config.data.warning}}.
-final class ConfigSource: Source {
+final class ModuleConfigSource: Source {
+    /// What a page can show of the config's state.
     struct Payload: Codable, Equatable {
         var expires = ""          // ISO 8601, or empty when there is no valid config
         var days_remaining = 0
@@ -250,13 +258,14 @@ final class ConfigSource: Source {
         "default": ["expires": "", "days_remaining": 0, "warning": "", "version": 0],
     ]
 
-    var verdict: ConfigVerdict = .invalid("not loaded")
+    var verdict: ModuleConfigVerdict = .invalid("not loaded")
     var now: () -> Date = Date.init
 
     func fetch(_ done: @escaping (Entry) -> Void) {
         done(entry(now: now()))
     }
 
+    /// The source's entry at a moment: the config's state, or as the error why there is no valid config.
     func entry(now: Date) -> Entry {
         switch verdict {
         case .invalid(let reason):

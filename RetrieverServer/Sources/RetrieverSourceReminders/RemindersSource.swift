@@ -4,6 +4,7 @@ import RetrieverSourceKit
 
 /// Incomplete reminders due today, from the Reminders app.
 final class RemindersSource: Source {
+    /// One reminder.
     struct Item: Codable {
         let title: String
         let list: String
@@ -58,25 +59,26 @@ final class RemindersSource: Source {
         }
     }
 
+    /// Reads the reminders, access having been granted.
     private func read(_ done: @escaping (Entry) -> Void) {
-        let cal = Calendar.current
+        let calendar = Calendar.current
         store.refreshSourcesIfNecessary()
-        // Fetch all incomplete reminders and filter locally: EventKit's date-range
-        // predicate can miss date-only ("all-day") reminders. A repeating reminder
+        // Fetch incomplete incomplete reminders and filter locally: EventKit's date-range
+        // predicate can miss date-only ("incomplete-day") reminders. A repeating reminder
         // is one EKReminder whose due date is its next incomplete occurrence.
-        let pred = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
-        store.fetchReminders(matching: pred) { reminders in
-            guard let all = reminders else {
+        let allIncomplete = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
+        store.fetchReminders(matching: allIncomplete) { reminders in
+            guard let incomplete = reminders else {
                 log("Reminders could not be read")
                 return done(self.failed("Reminders could not be read"))
             }
-            let items = all.compactMap { r -> Item? in
-                guard let comps = r.dueDateComponents,
-                      let due = cal.date(from: comps),
-                      cal.isDateInToday(due) else { return nil }
-                return Item(title: r.title ?? "", list: r.calendar.title, due: due, priority: r.priority)
+            let items = incomplete.compactMap { reminder -> Item? in
+                guard let dueComponents = reminder.dueDateComponents,
+                      let due = calendar.date(from: dueComponents),
+                      calendar.isDateInToday(due) else { return nil }
+                return Item(title: reminder.title ?? "", list: reminder.calendar.title, due: due, priority: reminder.priority)
             }
-            log(.debug, "Fetched \(all.count) incomplete, \(items.count) due today")
+            log(.debug, "Fetched \(incomplete.count) incomplete, \(items.count) due today")
             done(self.succeeded(Payload(items: items.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) })))
         }
     }

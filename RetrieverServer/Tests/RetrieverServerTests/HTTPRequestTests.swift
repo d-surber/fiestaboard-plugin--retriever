@@ -58,20 +58,20 @@ func refusesAMalformedContentLength(header: String) {
 }
 
 @Test func refusesADeclaredLengthThatIsTooLarge() {
-    #expect(HTTPRequest.parse(post("Content-Length: \(HTTPRequest.maxBytes)", body: Data())) == .invalid)
+    #expect(HTTPRequest.parse(post("Content-Length: \(HTTPRequest.maxByteCount)", body: Data())) == .invalid)
     #expect(HTTPRequest.parse(post("Content-Length: 99999999999999999999", body: Data())) == .invalid)
 }
 
 @Test func acceptsARequestOfExactlyTheMaximumSize() {
     let head = post("Content-Length: 00000", body: Data())   // as many digits as the real length
-    let length = HTTPRequest.maxBytes - head.count
+    let length = HTTPRequest.maxByteCount - head.count
     let request = post("Content-Length: \(length)", body: Data(repeating: 1, count: length))
-    #expect(request.count == HTTPRequest.maxBytes)
+    #expect(request.count == HTTPRequest.maxByteCount)
     #expect(HTTPRequest.parse(request) == .complete(line: "POST /retrieve HTTP/1.1", body: Data(repeating: 1, count: length)))
 }
 
 @Test func refusesHeadersThatNeverEnd() {
-    let endless = Data("POST /retrieve HTTP/1.1\r\n".utf8) + Data(repeating: 0x41, count: HTTPRequest.maxBytes)
+    let endless = Data("POST /retrieve HTTP/1.1\r\n".utf8) + Data(repeating: 0x41, count: HTTPRequest.maxByteCount)
     #expect(HTTPRequest.parse(endless) == .invalid)
-    #expect(HTTPRequest.parse(endless.prefix(HTTPRequest.maxBytes)) == .incomplete)
+    #expect(HTTPRequest.parse(endless.prefix(HTTPRequest.maxByteCount)) == .incomplete)
 }

@@ -8,12 +8,13 @@ enum ServerInfo {
     static let name = "RetrieverServer"
     static let version = "0.1.0"
 
+    /// What this server reports, as of now.
     static func current(port: UInt16) -> [String: JSON] {
         let os = ProcessInfo.processInfo.operatingSystemVersion
         return [
             "name": .string(name),
             "version": .string(version),
-            "protocol": ["min": .int(Wire.protocols.lowerBound), "max": .int(Wire.protocols.upperBound)],
+            "protocol": ["min": .int(Wire.protocolVersions.lowerBound), "max": .int(Wire.protocolVersions.upperBound)],
             "os": .string("macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"),
             "host": .string(hostName()),
             "port": .int(Int(port)),

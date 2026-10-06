@@ -9,11 +9,14 @@ enum HTTPRequest: Equatable {
     case complete(line: String, body: Data)
     case invalid                             // can never become a request this server accepts
 
-    static let maxBytes = 16384              // headers and body together
+    static let maxByteCount = 16384              // headers and body together
 
+    /// Reads a request from everything received so far on a connection.
+    ///
+    /// Called again with more as more arrives, until it stops answering `.incomplete`. A body is taken to be as long as Content-Length says and no longer; whatever follows it is ignored.
     static func parse(_ buffer: Data) -> HTTPRequest {
         guard let headEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
-            return buffer.count > maxBytes ? .invalid : .incomplete
+            return buffer.count > maxByteCount ? .invalid : .incomplete
         }
         let lines = String(decoding: buffer[..<headEnd.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
         var length = 0
@@ -32,7 +35,7 @@ enum HTTPRequest: Equatable {
             }
         }
         let body = buffer[headEnd.upperBound...]
-        guard buffer.count - body.count + length <= maxBytes else { return .invalid }
+        guard buffer.count - body.count + length <= maxByteCount else { return .invalid }
         guard body.count >= length else { return .incomplete }
         return .complete(line: lines[0], body: Data(body.prefix(length)))
     }

@@ -8,7 +8,7 @@ import Testing
 @Test func everythingThatDecidesWhatRunsIsInRootOwnedPlaces() {
     #expect(Installation.programs.path == "/Library/Application Support/Retriever/bin")
     #expect(Installation.agentFile("local.retriever-server").path == "/Library/LaunchAgents/local.retriever-server.plist")
-    #expect(ConfigStore.installed.path == "/Library/Application Support/Retriever")
+    #expect(ModuleConfigStore.installedFolder.path == "/Library/Application Support/Retriever")
 }
 
 @Test func theTransportKeyIsInTheAccountsOwnFolder() {
@@ -18,7 +18,7 @@ import Testing
 
 @Test func aNewTransportKeyIsOneTheServerAccepts() {
     let first = Installation.newTransportKey(), second = Installation.newTransportKey()
-    #expect(Wire.key(base64: first) != nil)
+    #expect(Wire.transportKey(base64: first) != nil)
     #expect(first != second)
 }
 
@@ -88,28 +88,28 @@ import Testing
     #expect(throws: (any Error).self) { try Signer.inspect("/nonexistent/program") }
 }
 
-// MARK: Config commands
+// MARK: SourceConfig commands
 
 @Test func configOptionsAreReadFromTheArguments() throws {
-    let plain = try ConfigCommand.Options(["a", "b"])
+    let plain = try ModuleConfigCommand.Options(["a", "b"])
     #expect(plain.names == ["a", "b"])
     #expect(plain.days == 90)
     #expect(!plain.pin)
-    let full = try ConfigCommand.Options(["--pin", "a", "--days", "30"])
+    let full = try ModuleConfigCommand.Options(["--pin", "a", "--days", "30"])
     #expect(full.names == ["a"])
     #expect(full.days == 30)
     #expect(full.pin)
-    #expect(throws: ConfigCommand.Problem.self) { try ConfigCommand.Options(["--days"]) }
-    #expect(throws: ConfigCommand.Problem.self) { try ConfigCommand.Options(["--days", "0"]) }
+    #expect(throws: ModuleConfigCommand.Problem.self) { try ModuleConfigCommand.Options(["--days"]) }
+    #expect(throws: ModuleConfigCommand.Problem.self) { try ModuleConfigCommand.Options(["--days", "0"]) }
 }
 
 @Test func allowingAModuleAddsItOrReplacesItsEntry() {
     let os = ModuleConfig.Module(identifier: "local.retriever-source.os")
     let music = ModuleConfig.Module(identifier: "local.retriever-source.music")
     let pinned = ModuleConfig.Module(identifier: "local.retriever-source.os", cdhash: "abc")
-    #expect(ConfigCommand.allowing([music], in: [os]) == [os, music])
-    #expect(ConfigCommand.allowing([pinned], in: [os, music]) == [music, pinned])
-    #expect(ConfigCommand.allowing([os], in: [pinned]) == [os])   // unpinning is adding again without --pin
+    #expect(ModuleConfigCommand.allowing([music], in: [os]) == [os, music])
+    #expect(ModuleConfigCommand.allowing([pinned], in: [os, music]) == [music, pinned])
+    #expect(ModuleConfigCommand.allowing([os], in: [pinned]) == [os])   // unpinning is adding again without --pin
 }
 
 // MARK: Help
@@ -119,7 +119,7 @@ import Testing
     for command in ["install", "config sign", "config install", "config add", "config remove", "status", "help", "--pin", "--days"] {
         #expect(help.contains(command), "help does not mention \(command)")
     }
-    for place in [Installation.programs.path, ConfigStore.installed.path, Installation.launchAgents.path, "transport.key", "RetrieverServer.log"] {
+    for place in [Installation.programs.path, ModuleConfigStore.installedFolder.path, Installation.launchAgents.path, "transport.key", "RetrieverServer.log"] {
         #expect(help.contains(place), "help does not mention \(place)")
     }
     #expect(help.contains("sudo"))

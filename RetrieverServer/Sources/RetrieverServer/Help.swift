@@ -2,6 +2,7 @@ import Foundation
 
 /// `RetrieverServer help`: every command, who runs it, and in what order.
 enum Help {
+    /// The whole of the help. `program` is not used in it: the text names the installed copy, which is the one to run.
     static func text(program: String) -> String {
         """
         RetrieverServer serves data from this Mac to the Retriever plugin for FiestaBoard.
@@ -54,7 +55,7 @@ enum Help {
               Signs the current list again, which renews its expiry. Naming
               modules replaces the list with exactly those.
 
-          All three take --days N. A config is valid for \(Int(ModuleConfig.validity / 86400)) days unless you say
+          All three take --days N. A config is valid for \(Int(ModuleConfig.defaultValidity / 86400)) days unless you say
           otherwise. From \(ModuleConfig.warningDays) days before it expires the server warns daily, in
           its log and to the board as retriever.module_config.data.warning. When
           it expires, no modules are loaded until a new one is installed.
@@ -78,8 +79,8 @@ enum Help {
 
         WHERE THINGS ARE
           Programs        \(Installation.programs.path)           (root)
-          Module config   \(ConfigStore.installed.path)/config.json, config.sig  (root)
-          Config key      \(ConfigStore.installed.path)/config-key.pub           (root)
+          Module config   \(ModuleConfigStore.installedFolder.path)/config.json, config.sig  (root)
+          SourceConfig key      \(ModuleConfigStore.installedFolder.path)/config-key.pub           (root)
           Launchd agents  \(Installation.launchAgents.path)/local.retriever-*.plist                  (root)
           Transport key   ~/Library/Application Support/Retriever/transport.key      (yours only)
           Log             ~/Library/Logs/RetrieverServer.log                         (kept under about 2 MB)

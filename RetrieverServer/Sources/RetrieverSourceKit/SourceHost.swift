@@ -9,6 +9,7 @@ import Foundation
     func fetch(reply: @escaping (Data) -> Void)
 }
 
+/// What a module says it is: the name of its source and the shape of its data.
 public struct SourceDescription: Codable, Equatable {
     public let name: String
     public let schema: JSON
@@ -41,7 +42,7 @@ public enum SourceHost {
             log("\(service): \(error); serving nobody")
             exit(1)
         }
-        let delegate = Delegate(Exported(source))
+        let delegate = ConnectionAcceptor(ExportedSource(source))
         listener.delegate = delegate
         listener.resume()
         log(.verbose, "\(service): ready")
@@ -50,7 +51,7 @@ public enum SourceHost {
     }
 
     /// The source, as the XPC service the server calls.
-    final class Exported: NSObject, SourceService {
+    final class ExportedSource: NSObject, SourceService {
         let source: Source
 
         init(_ source: Source) { self.source = source }
@@ -64,10 +65,11 @@ public enum SourceHost {
         }
     }
 
-    final class Delegate: NSObject, NSXPCListenerDelegate {
-        let exported: Exported
+    /// Hands the source to each connection the listener lets through; the listener's signing requirement has already decided who that may be.
+    final class ConnectionAcceptor: NSObject, NSXPCListenerDelegate {
+        let exported: ExportedSource
 
-        init(_ exported: Exported) { self.exported = exported }
+        init(_ exported: ExportedSource) { self.exported = exported }
 
         func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
             connection.exportedInterface = NSXPCInterface(with: SourceService.self)

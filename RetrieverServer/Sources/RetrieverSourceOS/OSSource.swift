@@ -3,6 +3,7 @@ import RetrieverSourceKit
 
 /// The version of macOS this Mac is running.
 final class OSSource: Source {
+    /// The version, as the system reports it.
     struct Payload: Codable, Equatable {
         let version: String   // "26.6.2"
         let build: String     // "25G78"
@@ -21,8 +22,8 @@ final class OSSource: Source {
     ]
 
     func fetch(_ done: @escaping (Entry) -> Void) {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        done(succeeded(Payload(version: "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)", build: Self.build())))
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        done(succeeded(Payload(version: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)", build: Self.build())))
     }
 
     /// The build number, from the kernel: `kern.osversion`.

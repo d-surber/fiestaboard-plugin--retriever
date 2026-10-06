@@ -7,7 +7,7 @@ import Testing
 private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-private func sealed(_ plaintext: String, key: SymmetricKey = key, context: Data = Wire.requestContext(Wire.retrievePath)) throws -> Data {
+private func sealed(_ plaintext: String, key: SymmetricKey = key, context: Data = Wire.requestAuthenticatedData(Wire.retrievePath)) throws -> Data {
     try ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: context).combined
 }
 
@@ -36,7 +36,7 @@ private func request(ts: Int, id: String = "abc123") -> String {
 }
 
 @Test func refusesAResponseReplayedAsARequest() throws {
-    let body = try sealed(request(ts: 1_800_000_000), context: Wire.responseContext(Wire.retrievePath))
+    let body = try sealed(request(ts: 1_800_000_000), context: Wire.responseAuthenticatedData(Wire.retrievePath))
     #expect(throws: Wire.Failure.unauthenticated) { try Wire.open(request: body, path: Wire.retrievePath, key: key, now: now) }
 }
 
@@ -65,25 +65,25 @@ func refusesAuthenticButMalformedRequests(plaintext: String) throws {
 
 @Test func sealsAResponseThatEchoesTheID() throws {
     let values = ["reminders": ["count": 2]]
-    let body = try Wire.seal(response: values, id: "abc123", seq: 7, path: Wire.retrievePath, key: key)
-    let plain = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseContext(Wire.retrievePath))
+    let body = try Wire.seal(response: values, id: "abc123", sequenceNumber: 7, path: Wire.retrievePath, key: key)
+    let plain = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseAuthenticatedData(Wire.retrievePath))
     let decoded = try JSONDecoder().decode([String: AnyDecodable].self, from: plain)
     #expect(decoded["id"] == .string("abc123"))
     #expect(decoded["data"] == .object(["reminders": .object(["count": .int(2)])]))
 }
 
 @Test func usesAFreshNonceForEveryResponse() throws {
-    let first = try Wire.seal(response: ["a": 1], id: "abc123", seq: 7, path: Wire.retrievePath, key: key)
-    let second = try Wire.seal(response: ["a": 1], id: "abc123", seq: 7, path: Wire.retrievePath, key: key)
+    let first = try Wire.seal(response: ["a": 1], id: "abc123", sequenceNumber: 7, path: Wire.retrievePath, key: key)
+    let second = try Wire.seal(response: ["a": 1], id: "abc123", sequenceNumber: 7, path: Wire.retrievePath, key: key)
     #expect(first.prefix(12) != second.prefix(12))
     #expect(first != second)
 }
 
 @Test func acceptsOnlyA32ByteBase64Key() {
-    #expect(Wire.key(base64: Data(repeating: 7, count: 32).base64EncodedString()) != nil)
-    #expect(Wire.key(base64: Data(repeating: 7, count: 16).base64EncodedString()) == nil)
-    #expect(Wire.key(base64: "") == nil)
-    #expect(Wire.key(base64: "not base64!") == nil)
+    #expect(Wire.transportKey(base64: Data(repeating: 7, count: 32).base64EncodedString()) != nil)
+    #expect(Wire.transportKey(base64: Data(repeating: 7, count: 16).base64EncodedString()) == nil)
+    #expect(Wire.transportKey(base64: "") == nil)
+    #expect(Wire.transportKey(base64: "not base64!") == nil)
 }
 
 // MARK: Interop
@@ -108,9 +108,9 @@ private struct Vectors: Decodable {
 
     func opened<Values: Codable>(_ path: String, as type: Values.Type) throws -> (ResponseVector, Wire.Response<Values>) {
         let response = try #require(responses_from_server[path])
-        let key = try #require(Wire.key(base64: self.key))
+        let key = try #require(Wire.transportKey(base64: self.key))
         let box = try ChaChaPoly.SealedBox(combined: bytes(hex: response.body))
-        let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseContext(path))
+        let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(path))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (response, try decoder.decode(Wire.Response<Values>.self, from: plain))
@@ -128,13 +128,13 @@ private func bytes(hex: String) -> Data {
     return data
 }
 
-@Test(arguments: Wire.paths) func opensARequestSealedByThePlugin(path: String) throws {
+@Test(arguments: Wire.endpointPaths) func opensARequestSealedByThePlugin(path: String) throws {
     let vectors = try Vectors.load()
     let request = try #require(vectors.requests_from_plugin[path])
-    let key = try #require(Wire.key(base64: vectors.key))
+    let key = try #require(Wire.transportKey(base64: vectors.key))
     let at = Date(timeIntervalSince1970: TimeInterval(request.ts))
     #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: key, now: at).id == request.id)
-    for other in Wire.paths where other != path {
+    for other in Wire.endpointPaths where other != path {
         #expect(throws: Wire.Failure.unauthenticated) {
             try Wire.open(request: bytes(hex: request.body), path: other, key: key, now: at)
         }
@@ -144,15 +144,15 @@ private func bytes(hex: String) -> Data {
 @Test func retrieveResponseVectorIsWhatTheServerSeals() throws {
     let (vector, decoded) = try Vectors.load().opened(Wire.retrievePath, as: [String: Entry].self)
     #expect(decoded.id == vector.id)
-    #expect(decoded.seq == vector.seq)
-    #expect(decoded.seq == Config(sources: vectorSources).seq)
+    #expect(decoded.sequenceNumber == vector.seq)
+    #expect(decoded.sequenceNumber == SourceConfig(sources: vectorSources).sequenceNumber)
     #expect(decoded.data == vectorEntries)
 }
 
 @Test func serverResponseVectorIsTheStandInInfo() throws {
-    let (vector, decoded) = try Vectors.load().opened(Wire.serverPath, as: [String: JSON].self)
+    let (vector, decoded) = try Vectors.load().opened(Wire.serverInfoPath, as: [String: JSON].self)
     #expect(decoded.id == vector.id)
-    #expect(decoded.seq == Config(sources: vectorSources).seq)
+    #expect(decoded.sequenceNumber == SourceConfig(sources: vectorSources).sequenceNumber)
     #expect(decoded.data == vectorServerInfo)
 }
 
@@ -161,9 +161,9 @@ private func bytes(hex: String) -> Data {
 @Test func configResponseVectorIsTheStandInConfig() throws {
     let (vector, decoded) = try Vectors.load().opened(Wire.configPath, as: [String: JSON].self)
     #expect(decoded.id == vector.id)
-    #expect(decoded.seq == vector.seq)
-    let config = Config(sources: vectorSources)
-    #expect(decoded.seq == config.seq)
+    #expect(decoded.sequenceNumber == vector.seq)
+    let config = SourceConfig(sources: vectorSources)
+    #expect(decoded.sequenceNumber == config.sequenceNumber)
     #expect(decoded.data == config.schemas)
 }
 

@@ -7,6 +7,7 @@ import RetrieverSourceKit
 /// Up Next queue, and a track's neighbours in its playlist turned out not to
 /// be the tracks played before and after it, even for an album in order.
 final class MusicSource: Source {
+    /// What is playing.
     struct Payload: Codable, Equatable {
         var state = "stopped"   // "playing", "paused" or "stopped"
         var title = ""

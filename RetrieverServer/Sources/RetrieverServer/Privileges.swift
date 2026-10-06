@@ -44,6 +44,7 @@ struct InvokingAccount {
     }
 }
 
+/// The identity of the account that ran sudo could not be taken on.
 struct PrivilegeError: Error, CustomStringConvertible {
     let description = "could not act as the account that ran sudo"
 }

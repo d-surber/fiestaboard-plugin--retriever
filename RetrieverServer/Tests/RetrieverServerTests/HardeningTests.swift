@@ -56,9 +56,9 @@ func aRequirementIsNotWrittenForTextThatIsNotACodeHash(cdhash: String) {
 
 @Test func aSignedConfigListingSomethingThatIsNotAModuleIsRefused() throws {
     let key = P256.Signing.PrivateKey()
-    func verdict(_ modules: [ModuleConfig.Module]) throws -> ConfigVerdict {
+    func verdict(_ modules: [ModuleConfig.Module]) throws -> ModuleConfigVerdict {
         let bytes = ModuleConfig(version: 1, expires: now.addingTimeInterval(86400), modules: modules).encoded()
-        return ConfigStore.verify(config: bytes, signature: try key.signature(for: bytes).derRepresentation,
+        return ModuleConfigStore.verify(config: bytes, signature: try key.signature(for: bytes).derRepresentation,
                                   publicKeyPEM: key.publicKey.pemRepresentation, now: now)
     }
     let os = ModuleConfig.Module(identifier: "local.retriever-source.os")
@@ -76,46 +76,46 @@ private let installedKey = P256.Signing.PrivateKey().publicKey.pemRepresentation
 private let otherKey = P256.Signing.PrivateKey().publicKey.pemRepresentation
 
 @Test func aConfigNeverBringsADifferentKeyWithItUnasked() throws {
-    #expect(throws: ConfigStore.KeyRefusal.differentKey) {
-        try ConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: otherKey, replacingKey: false)
+    #expect(throws: ModuleConfigStore.KeyRefusal.differentKey) {
+        try ModuleConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: otherKey, replacingKey: false)
     }
-    #expect(try ConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: otherKey, replacingKey: true) == .replacement(otherKey))
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: otherKey, replacingKey: true) == .replacement(otherKey))
 }
 
 @Test func theInstalledKeyIsKeptWhenTheConfigComesWithTheSameOneOrNone() throws {
-    #expect(try ConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: installedKey, replacingKey: false) == .installed(installedKey))
-    #expect(try ConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: installedKey + "\n", replacingKey: false) == .installed(installedKey))
-    #expect(try ConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: nil, replacingKey: false) == .installed(installedKey))
-    #expect(try ConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: installedKey, replacingKey: true) == .installed(installedKey))
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: installedKey, replacingKey: false) == .installed(installedKey))
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: installedKey + "\n", replacingKey: false) == .installed(installedKey))
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: nil, replacingKey: false) == .installed(installedKey))
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: nil, installed: installedKey, waiting: installedKey, replacingKey: true) == .installed(installedKey))
 }
 
 @Test func theFirstKeyComesWithTheFirstConfig() throws {
-    #expect(try ConfigStore.keyToTrust(builtIn: nil, installed: nil, waiting: otherKey, replacingKey: false) == .first(otherKey))
-    #expect(throws: ConfigStore.KeyRefusal.noKey) { try ConfigStore.keyToTrust(builtIn: nil, installed: nil, waiting: nil, replacingKey: false) }
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: nil, installed: nil, waiting: otherKey, replacingKey: false) == .first(otherKey))
+    #expect(throws: ModuleConfigStore.KeyRefusal.noKey) { try ModuleConfigStore.keyToTrust(builtIn: nil, installed: nil, waiting: nil, replacingKey: false) }
 }
 
 @Test func aKeyBuiltIntoTheServerIsTheOnlyOne() throws {
-    #expect(try ConfigStore.keyToTrust(builtIn: installedKey, installed: otherKey, waiting: otherKey, replacingKey: true) == .builtIn(installedKey))
+    #expect(try ModuleConfigStore.keyToTrust(builtIn: installedKey, installed: otherKey, waiting: otherKey, replacingKey: true) == .builtIn(installedKey))
 }
 
 @Test func onlyANewKeyIsInstalledWithAConfig() {
-    #expect(ConfigStore.KeyToTrust.first(otherKey).isInstalledWithTheConfig)
-    #expect(ConfigStore.KeyToTrust.replacement(otherKey).isInstalledWithTheConfig)
-    #expect(ConfigStore.KeyToTrust.installed(otherKey).isInstalledWithTheConfig == false)
-    #expect(ConfigStore.KeyToTrust.builtIn(otherKey).isInstalledWithTheConfig == false)
+    #expect(ModuleConfigStore.KeyToTrust.first(otherKey).isInstalledWithTheConfig)
+    #expect(ModuleConfigStore.KeyToTrust.replacement(otherKey).isInstalledWithTheConfig)
+    #expect(ModuleConfigStore.KeyToTrust.installed(otherKey).isInstalledWithTheConfig == false)
+    #expect(ModuleConfigStore.KeyToTrust.builtIn(otherKey).isInstalledWithTheConfig == false)
 }
 
 @Test func aKeysFingerprintIsShortStableAndItsOwn() throws {
-    let fingerprint = try #require(ConfigStore.keyFingerprint(pem: installedKey))
+    let fingerprint = try #require(ModuleConfigStore.keyFingerprint(pem: installedKey))
     #expect(fingerprint.count == 19)   // sixteen digits in fours
-    #expect(fingerprint == ConfigStore.keyFingerprint(pem: installedKey + "\n"))
-    #expect(fingerprint != ConfigStore.keyFingerprint(pem: otherKey))
-    #expect(ConfigStore.keyFingerprint(pem: "not a key") == nil)
+    #expect(fingerprint == ModuleConfigStore.keyFingerprint(pem: installedKey + "\n"))
+    #expect(fingerprint != ModuleConfigStore.keyFingerprint(pem: otherKey))
+    #expect(ModuleConfigStore.keyFingerprint(pem: "not a key") == nil)
 }
 
 @Test func replacingTheKeyHasToBeAskedForByName() throws {
-    #expect(try ConfigCommand.Options([]).replaceKey == false)
-    #expect(try ConfigCommand.Options(["--replace-key"]).replaceKey)
+    #expect(try ModuleConfigCommand.Options([]).replaceKey == false)
+    #expect(try ModuleConfigCommand.Options(["--replace-key"]).replaceKey)
 }
 
 // MARK: The installer checks the copy, not the original
@@ -229,7 +229,7 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
     defer { try? FileManager.default.removeItem(at: home) }
     let note = try InstallCommand.ensureTransportKey(home: home)
     let key = try #require(Installation.transportKey(home: home))
-    #expect(Wire.key(base64: key) != nil)
+    #expect(Wire.transportKey(base64: key) != nil)
     #expect(note.contains(key))
     let file = Installation.transportKeyFile(home: home)
     #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int == 0o600)
@@ -243,7 +243,7 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
 @Test func aRequestIDIsRememberedForAsLongAsACopyCouldBeSentAgain() {
     var answered = AnsweredRequests()
     let period = answered.remembersFor
-    #expect(period > 2 * Wire.maxSkew)
+    #expect(period > 2 * Wire.maxClockDifference)
     let admitted = [
         answered.admit("a", now: now),
         answered.admit("b", now: now),
@@ -271,10 +271,10 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
 
 @Test func aConfigListingAModuleTwiceOrUnderAReservedNameIsRefused() throws {
     let key = P256.Signing.PrivateKey()
-    func verdict(_ identifiers: [String]) throws -> ConfigVerdict {
+    func verdict(_ identifiers: [String]) throws -> ModuleConfigVerdict {
         let modules = identifiers.map { ModuleConfig.Module(identifier: $0) }
         let bytes = ModuleConfig(version: 1, expires: now.addingTimeInterval(86400), modules: modules).encoded()
-        return ConfigStore.verify(config: bytes, signature: try key.signature(for: bytes).derRepresentation,
+        return ModuleConfigStore.verify(config: bytes, signature: try key.signature(for: bytes).derRepresentation,
                                   publicKeyPEM: key.publicKey.pemRepresentation, now: now)
     }
     #expect(try verdict(["local.retriever-source.os", "local.retriever-source.music", "local.retriever-source.os"])
@@ -310,9 +310,9 @@ private final class ConfigFolder {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let modules = names.map { ModuleConfig.Module(identifier: Signer.moduleIdentifier(for: $0)) }
         let bytes = ModuleConfig(version: 1, expires: Date().addingTimeInterval(86400), modules: modules).encoded()
-        try bytes.write(to: directory.appendingPathComponent(ConfigStore.configFile))
-        try key.signature(for: bytes).derRepresentation.write(to: directory.appendingPathComponent(ConfigStore.signatureFile))
-        try Data(key.publicKey.pemRepresentation.utf8).write(to: directory.appendingPathComponent(ConfigStore.publicKeyFile))
+        try bytes.write(to: directory.appendingPathComponent(ModuleConfigStore.configFile))
+        try key.signature(for: bytes).derRepresentation.write(to: directory.appendingPathComponent(ModuleConfigStore.signatureFile))
+        try Data(key.publicKey.pemRepresentation.utf8).write(to: directory.appendingPathComponent(ModuleConfigStore.publicKeyFile))
     }
 
     deinit { try? FileManager.default.removeItem(at: directory) }
@@ -350,11 +350,11 @@ private func eventually(on queue: DispatchQueue, within seconds: Double = 5, _ c
     serverQueue.sync { _ = state.refresh() }
     #expect(Date().timeIntervalSince(started) < 1)
     #expect(serverQueue.sync { moduleNames(state) } == [])
-    #expect(serverQueue.sync { state.incomplete })
+    #expect(serverQueue.sync { state.hasUnreachedModules })
 
     release.signal()
     #expect(eventually(on: serverQueue) { moduleNames(state) == ["quick", "stuck"] })
-    #expect(serverQueue.sync { state.incomplete } == false)
+    #expect(serverQueue.sync { state.hasUnreachedModules } == false)
 }
 
 @Test func onlyTheModulesNotYetReachedAreAskedAgainAndOneAskingAtATime() throws {
@@ -372,7 +372,7 @@ private func eventually(on queue: DispatchQueue, within seconds: Double = 5, _ c
 
     serverQueue.sync { _ = state.refresh() }
     #expect(eventually(on: serverQueue) { moduleNames(state) == ["os"] })
-    #expect(serverQueue.sync { state.incomplete })
+    #expect(serverQueue.sync { state.hasUnreachedModules })
 
     lock.withLock { reachable = ["os", "words"] }
     // Three requests in a row, as one fetch by the plugin makes.

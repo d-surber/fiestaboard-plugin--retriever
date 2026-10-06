@@ -9,12 +9,13 @@ import RetrieverSourceKit
 /// be made to: no response, no line of its own in the log, a place among a
 /// limited number of open connections, and that only for a limited time.
 final class RequestListener {
+    /// What a connection may cost the server.
     struct Limits {
         /// How long a connection has to deliver a whole request. The plugin
         /// sends one in a single write and gives up on a fetch after 4 s.
         var requestTimeout: TimeInterval = 10
         /// How long the sources have to answer; the plugin's 4 s must cover it.
-        var sourceTimeout: TimeInterval = 3
+        var sourceTimeout: TimeInterval = RemoteSource.answerTimeout
         /// Connections open at once. One plugin makes one at a time; the
         /// rest is room for something else on the network knocking.
         var maxOpenConnections = 32
@@ -78,6 +79,7 @@ final class RequestListener {
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
+    /// Takes a new connection, if there is room for one, and gives it until the deadline to deliver a request.
     private func accept(_ connection: NWConnection) {
         guard openConnections < limits.maxOpenConnections else {
             connection.cancel()
@@ -115,15 +117,16 @@ final class RequestListener {
         case .invalid: return done(nil)
         case .incomplete: break
         }
-        exchange.connection.receive(minimumIncompleteLength: 1, maximumLength: HTTPRequest.maxBytes) { [weak self] data, _, _, error in
+        exchange.connection.receive(minimumIncompleteLength: 1, maximumLength: HTTPRequest.maxByteCount) { [weak self] data, _, _, error in
             guard error == nil, let data, !data.isEmpty else { return done(nil) }
             self?.readRequest(exchange, buffer + data, done)
         }
     }
 
+    /// Answers a whole request: the endpoint's data if it shows the key and is one the server accepts, the reason if it shows the key and is not, and nothing otherwise.
     private func answer(_ request: (line: String, body: Data), _ exchange: Exchange) {
         let words = request.line.split(separator: " ")
-        guard words.count >= 2, let path = URLComponents(string: String(words[1]))?.path, Wire.paths.contains(path) else {
+        guard words.count >= 2, let path = URLComponents(string: String(words[1]))?.path, Wire.endpointPaths.contains(path) else {
             return sayNothing(exchange, "unknown path")
         }
         guard words[0] == "POST" else { return sayNothing(exchange, "not POST") }
@@ -144,20 +147,20 @@ final class RequestListener {
 
         // The sequence number goes with the sources asked, whatever happens to
         // the state while they answer.
-        let sequenceNumber = state.config.seq
+        let sequenceNumber = state.sourceConfig.sequenceNumber
         func send<Body: Codable>(_ data: Body) {
-            guard let body = try? Wire.seal(response: data, id: accepted.id, seq: sequenceNumber, path: path, key: key) else {
+            guard let body = try? Wire.seal(response: data, id: accepted.id, sequenceNumber: sequenceNumber, path: path, key: key) else {
                 return respond(exchange, path, "500 Internal Server Error")
             }
             respond(exchange, path, "200 OK", body)
         }
-        if path == Wire.serverPath { send(serverInfo) }
-        else if path == Wire.configPath { send(state.config.schemas) }
+        if path == Wire.serverInfoPath { send(serverInfo) }
+        else if path == Wire.configPath { send(state.sourceConfig.schemas) }
         else { retrieve(from: state.sources, timeout: limits.sourceTimeout, on: queue) { send($0) } }
 
         // A module that could not be reached is tried again now that a
         // request has come, after this one is answered so it is not held up.
-        if state.incomplete { queue.async { [state] in state.refresh(retryingModules: true) } }
+        if state.hasUnreachedModules { queue.async { [state] in state.refresh(retryingModules: true) } }
     }
 
     /// Sends a status and a body, and closes. Only for a request that decrypted.
@@ -222,13 +225,13 @@ struct UnansweredTally {
 
 /// Remembers the requests answered lately, so that none is answered twice.
 ///
-/// A request is good for as long as its timestamp is within `Wire.maxSkew`
+/// A request is good for as long as its timestamp is within `Wire.maxClockDifference`
 /// of the server's clock, either side, so a copy of one could be sent again
 /// for up to twice that. Its ID is remembered for that long. Only requests
 /// that decrypted are remembered, so only a holder of the key can add to
 /// the memory, and it is bounded all the same.
 struct AnsweredRequests {
-    var remembersFor: TimeInterval = 2 * Wire.maxSkew + 1
+    var remembersFor: TimeInterval = 2 * Wire.maxClockDifference + 1
     var capacity = 4096
     private var forgetAt: [String: Date] = [:]
 

@@ -9,8 +9,9 @@ import RetrieverSourceKit
 // that does not is refused. The programs and their launchd files go to
 // root-owned locations, so replacing any of them needs an administrator.
 enum InstallCommand {
-    typealias Problem = ConfigCommand.Problem
+    typealias Problem = ModuleConfigCommand.Problem
 
+    /// Runs `install` and exits: 0 if everything was installed, 1 with the reason printed if not.
     static func run() -> Never {
         do { try install() } catch {
             print("\(error)")
@@ -19,8 +20,12 @@ enum InstallCommand {
         exit(0)
     }
 
+    /// Installs the programs, sees that the account has a transport key, and
+    /// starts the agents in the invoking account's session.
+    /// - Throws: `Problem` if not run by an administrator through sudo, if the
+    ///   server's own copy does not check, or if an agent cannot be started.
     static func install() throws {
-        let program = ConfigCommand.program
+        let program = ModuleConfigCommand.program
         guard getuid() == 0 else { throw Problem("Installing needs an administrator: sudo \"\(program)\" install") }
         guard let account = InvokingAccount.fromSudo() else {
             throw Problem("Run this with sudo from your own account, so the agents can be started for you.")
@@ -29,10 +34,6 @@ enum InstallCommand {
         let installedServer = try installPrograms(besideServerAt: program)
         let keyNote = try account.withItsAccess { try ensureTransportKey(home: account.home) }
         let domain = "gui/\(account.uid)"
-        // Agents of an earlier per-account install give way to the root-owned ones.
-        for label in try account.withItsAccess({ removePerAccountAgentFiles(home: account.home) }) {
-            launchctl("bootout", "\(domain)/\(label)")
-        }
 
         for module in installedServer.modules {
             try startAgent(module.identifier, Installation.moduleAgent(identifier: module.identifier, program: module.path), in: domain)
@@ -42,7 +43,7 @@ enum InstallCommand {
         print("Installed the server. Programs are in \(Installation.programs.path).")
         print(keyNote)
 
-        let verdict = ConfigStore.load(from: ConfigStore.installed, builtInKey: ConfigStore.builtInKey(), now: Date())
+        let verdict = ModuleConfigStore.load(from: ModuleConfigStore.installedFolder, builtInKey: ModuleConfigStore.builtInKey(), now: Date())
         if case .invalid(let reason) = verdict {
             print("No modules will be loaded yet: \(reason). As yourself, run:")
             print("  \"\(installedServer.path)\" config sign")
@@ -90,43 +91,19 @@ enum InstallCommand {
         return (installedServer, installedModules)
     }
 
-    /// Makes sure the account has a transport key: the one it has, one
-    /// carried over from an earlier per-account install, or a new one.
+    /// Makes sure the account has a transport key, making one if it has none.
     /// Run with the account's own access, since it is all in the account's folder.
     /// - Returns: what to tell the user about the key.
     static func ensureTransportKey(home: URL) throws -> String {
         guard Installation.transportKey(home: home) == nil else { return "The transport key is unchanged." }
         let files = FileManager.default
         let keyFile = Installation.transportKeyFile(home: home)
-        let earlierAgent = NSDictionary(contentsOf: perAccountAgents(home: home).appendingPathComponent("\(Signer.serverIdentifier).plist"))
-        let carriedOver = (earlierAgent?["EnvironmentVariables"] as? [String: String])?["RETRIEVER_KEY"]
-        let key = carriedOver ?? Installation.newTransportKey()
-
+        let key = Installation.newTransportKey()
         try files.createDirectory(at: keyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: keyFile.deletingLastPathComponent().path)
         try Data((key + "\n").utf8).write(to: keyFile, options: .atomic)
         try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyFile.path)
-        return carriedOver != nil ? "The transport key was carried over; the plugin's settings need no change."
-                                  : "A new transport key was made. Enter it in the plugin's settings: \(key)"
-    }
-
-    static func perAccountAgents(home: URL) -> URL {
-        home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-    }
-
-    /// Removes the launchd files of an earlier per-account install. Run with
-    /// the account's own access.
-    /// - Returns: the labels of the agents whose files were there, for the caller to stop.
-    static func removePerAccountAgentFiles(home: URL) -> [String] {
-        let files = FileManager.default
-        let agents = perAccountAgents(home: home)
-        var labels: [String] = []
-        for name in (try? files.contentsOfDirectory(atPath: agents.path)) ?? []
-        where name.hasPrefix("local.retriever-") && name.hasSuffix(".plist") {
-            labels.append(String(name.dropLast(".plist".count)))
-            try? files.removeItem(at: agents.appendingPathComponent(name))
-        }
-        return labels
+        return "A new transport key was made. Enter it in the plugin's settings: \(key)"
     }
 
     /// Writes an agent's launchd file, root-owned, and starts the agent in `domain`.
@@ -139,6 +116,8 @@ enum InstallCommand {
         guard launchctl("bootstrap", domain, file.path) == 0 else { throw Problem("Could not start \(label).") }
     }
 
+    /// Runs launchctl with these arguments, quietly.
+    /// - Returns: its exit status, or -1 if it could not be run.
     @discardableResult
     static func launchctl(_ arguments: String...) -> Int32 {
         let process = Process()

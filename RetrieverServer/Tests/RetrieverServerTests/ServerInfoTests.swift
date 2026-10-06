@@ -10,14 +10,14 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
 private func request(_ path: String, protocol requested: Int? = nil) throws -> Data {
     let field = requested.map { #", "protocol": \#($0)"# } ?? ""
     let plaintext = Data(#"{"ts": 1800000000, "id": "abc123"\#(field)}"#.utf8)
-    return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestContext(path)).combined
+    return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestAuthenticatedData(path)).combined
 }
 
 @Test func serverInfoHasTheKeysEveryServerMustReport() {
     let info = ServerInfo.current(port: 42511)
     #expect(info["name"] == "RetrieverServer")
     #expect(info["version"] == .string(ServerInfo.version))
-    #expect(info["protocol"] == ["min": .int(Wire.protocols.lowerBound), "max": .int(Wire.protocols.upperBound)])
+    #expect(info["protocol"] == ["min": .int(Wire.protocolVersions.lowerBound), "max": .int(Wire.protocolVersions.upperBound)])
 }
 
 @Test func serverInfoHasTheWellKnownOptionalKeys() {
@@ -33,20 +33,20 @@ private func request(_ path: String, protocol requested: Int? = nil) throws -> D
 
 @Test(arguments: [Wire.configPath, Wire.retrievePath])
 func aRequestThatNamesNoProtocolMeansProtocolOne(path: String) throws {
-    #expect(try Wire.open(request: request(path), path: path, key: key, now: now) == Wire.Accepted(id: "abc123", protocol: 1))
+    #expect(try Wire.open(request: request(path), path: path, key: key, now: now) == Wire.Accepted(id: "abc123", protocolVersion: 1))
 }
 
 @Test(arguments: [Wire.configPath, Wire.retrievePath])
 func aRequestMayNameAProtocolInTheServersRange(path: String) throws {
-    for supported in Wire.protocols {
+    for supported in Wire.protocolVersions {
         let accepted = try Wire.open(request: request(path, protocol: supported), path: path, key: key, now: now)
-        #expect(accepted == Wire.Accepted(id: "abc123", protocol: supported))
+        #expect(accepted == Wire.Accepted(id: "abc123", protocolVersion: supported))
     }
 }
 
 @Test(arguments: [Wire.configPath, Wire.retrievePath])
 func aProtocolOutsideTheRangeIsRefused(path: String) throws {
-    for unsupported in [Wire.protocols.lowerBound - 1, Wire.protocols.upperBound + 1, 99] {
+    for unsupported in [Wire.protocolVersions.lowerBound - 1, Wire.protocolVersions.upperBound + 1, 99] {
         #expect(throws: Wire.Failure.unsupportedProtocol) {
             try Wire.open(request: request(path, protocol: unsupported), path: path, key: key, now: now)
         }
@@ -56,7 +56,7 @@ func aProtocolOutsideTheRangeIsRefused(path: String) throws {
 @Test func serverInfoIsAnswerableWhateverProtocolIsNamed() throws {
     // /server is how a client learns the range, so it cannot depend on one.
     for requested in [nil, 1, 99] as [Int?] {
-        let accepted = try Wire.open(request: request(Wire.serverPath, protocol: requested), path: Wire.serverPath, key: key, now: now)
+        let accepted = try Wire.open(request: request(Wire.serverInfoPath, protocol: requested), path: Wire.serverInfoPath, key: key, now: now)
         #expect(accepted.id == "abc123")
     }
 }
@@ -69,10 +69,10 @@ func aProtocolOutsideTheRangeIsRefused(path: String) throws {
 }
 
 @Test func serverInfoIsSealedForItsOwnPath() throws {
-    let body = try Wire.seal(response: ServerInfo.current(port: 42511), id: "abc123", seq: 7, path: Wire.serverPath, key: key)
+    let body = try Wire.seal(response: ServerInfo.current(port: 42511), id: "abc123", sequenceNumber: 7, path: Wire.serverInfoPath, key: key)
     let box = try ChaChaPoly.SealedBox(combined: body)
-    #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: key, authenticating: Wire.responseContext(Wire.configPath)) }
-    let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseContext(Wire.serverPath))
+    #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(Wire.configPath)) }
+    let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(Wire.serverInfoPath))
     let decoded = try JSONDecoder().decode(Wire.Response<[String: JSON]>.self, from: plain)
     #expect(decoded.data == ServerInfo.current(port: 42511))
 }

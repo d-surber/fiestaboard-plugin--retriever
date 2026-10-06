@@ -85,7 +85,7 @@ private func httpRequest(_ line: String, body: Data = Data()) -> Data {
 
 private func sealedRequest(path: String, timestamp: Date = Date(), id: String = "abc123") throws -> Data {
     let plaintext = Data(#"{"ts": \#(Int(timestamp.timeIntervalSince1970)), "id": "\#(id)"}"#.utf8)
-    return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestContext(path)).combined
+    return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestAuthenticatedData(path)).combined
 }
 
 /// The status line and the body of an HTTP response.
@@ -98,7 +98,7 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
 /// These tests wait on real connections. They run one at a time so that
 /// their waiting does not use up the threads the other tests run on.
 @Suite(.serialized) struct ListenerOverRealConnections {
-    @Test(arguments: [Wire.serverPath, Wire.configPath, Wire.retrievePath])
+    @Test(arguments: [Wire.serverInfoPath, Wire.configPath, Wire.retrievePath])
     func answersARequestThatShowsTheKey(path: String) throws {
         let running = try RunningListener()
         let client = try ClientConnection(port: running.port)
@@ -106,10 +106,10 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         guard case .answered(let response) = client.outcome(within: 5) else { Issue.record("no answer"); return }
         let (status, body) = try parts(of: response)
         #expect(status == "HTTP/1.1 200 OK")
-        let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseContext(path))
+        let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseAuthenticatedData(path))
         let answer = try JSONDecoder().decode(Wire.Response<JSON>.self, from: plaintext)
         #expect(answer.id == "abc123")
-        #expect(answer.seq == running.queue.sync { running.state.config.seq })
+        #expect(answer.sequenceNumber == running.queue.sync { running.state.sourceConfig.sequenceNumber })
     }
 
     @Test func aRequestThatDecryptsButIsRefusedIsToldWhy() throws {
@@ -143,7 +143,7 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         let client = try ClientConnection(port: running.port)
         let other = SymmetricKey(data: Data(repeating: 8, count: 32))
         let body = try ChaChaPoly.seal(Data(#"{"ts": \#(Int(Date().timeIntervalSince1970)), "id": "x"}"#.utf8), using: other,
-                                       authenticating: Wire.requestContext(Wire.retrievePath)).combined
+                                       authenticating: Wire.requestAuthenticatedData(Wire.retrievePath)).combined
         client.send(httpRequest("POST /retrieve HTTP/1.1", body: body))
         #expect(client.outcome(within: 5) == .closedWithNothingSent)
     }
@@ -195,7 +195,7 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         var answered = false
         for _ in 0..<20 where !answered {
             let client = try ClientConnection(port: running.port)
-            client.send(httpRequest("POST /server HTTP/1.1", body: try sealedRequest(path: Wire.serverPath)))
+            client.send(httpRequest("POST /server HTTP/1.1", body: try sealedRequest(path: Wire.serverInfoPath)))
             if case .answered = client.outcome(within: 1) { answered = true } else { Thread.sleep(forTimeInterval: 0.1) }
         }
         #expect(answered)

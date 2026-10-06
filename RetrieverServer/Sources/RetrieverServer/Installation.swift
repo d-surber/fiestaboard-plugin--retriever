@@ -7,7 +7,7 @@ import RetrieverSourceKit
 /// launchd files that start them, and the module config. Only the transport
 /// key, which is one account's secret, is in that account's own folder.
 enum Installation {
-    static let root = ConfigStore.installed
+    static let root = ModuleConfigStore.installedFolder
     static let programs = root.appendingPathComponent("bin", isDirectory: true)
     static let launchAgents = URL(fileURLWithPath: "/Library/LaunchAgents", isDirectory: true)
     static let serverName = "RetrieverServer"
@@ -19,6 +19,7 @@ enum Installation {
         home.appendingPathComponent("Library/Application Support/Retriever/transport.key")
     }
 
+    /// Where launchd looks for the agent with this label.
     static func agentFile(_ label: String) -> URL { launchAgents.appendingPathComponent("\(label).plist") }
 
     /// The launchd file for the server: started at login and kept running,
@@ -66,6 +67,7 @@ enum Installation {
         return (accepted, refused)
     }
 
+    /// Why a program was not installed.
     enum ProgramRefusal: Error, CustomStringConvertible, Equatable {
         case notSignedByThisSigner(String)
         case signedAs(String, expected: String)
@@ -117,12 +119,14 @@ enum Installation {
         return destination.path
     }
 
+    /// A new transport key: 32 random bytes, in base64.
     static func newTransportKey() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes).base64EncodedString()
     }
 
+    /// The account's transport key as its file holds it, or nil if there is no file. Not checked for being a key.
     static func transportKey(home: URL) -> String? {
         (try? String(contentsOf: transportKeyFile(home: home), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
