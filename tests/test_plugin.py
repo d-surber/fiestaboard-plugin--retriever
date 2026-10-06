@@ -450,6 +450,434 @@ class TestServerInfo:
         assert data["error"] == ""
 
 
+ITEMS = [
+    {"title": "water plants", "list": "Home", "due": "2026-10-05T16:00:00Z", "priority": 1},
+    {"title": "call dentist", "list": "Health", "due": "2026-10-05T18:30:00Z", "priority": 0},
+]
+CONTEXT = {
+    "retriever": {
+        "reminders": {"error": "", "data": {"count": 2, "items": ITEMS}},
+        "music": {"error": "", "data": {"state": "playing", "title": "So What"}},
+        "tags": {"error": "", "data": ["a", "b", "c"]},
+        "server": {"name": "FakeServer"},
+        "error": "",
+    }
+}
+
+
+def rows(*pairs, default=""):
+    return [{"variable": name, "definition": definition, "default": default} for name, definition in pairs]
+
+
+class TestValues:
+    """Rows that name a value and define it by an expression over the server's values."""
+
+    @pytest.mark.parametrize(
+        ("definition", "value"),
+        [
+            ("retriever.reminders.data.count", 2),
+            ("retriever.reminders.data.items", ITEMS),
+            ("retriever.reminders.data", {"count": 2, "items": ITEMS}),
+            ("retriever.reminders.data.items.1.title", "call dentist"),
+            ("retriever.reminders.data.items[1].title", "call dentist"),
+            ("  retriever.error  ", ""),
+        ],
+    )
+    def test_a_definition_that_is_only_a_path_keeps_the_values_type(self, definition, value):
+        assert retriever.define(rows(("v", definition)), CONTEXT) == {"v": value}
+
+    @pytest.mark.parametrize(
+        ("definition", "value"),
+        [
+            ("UPPER(retriever.reminders.data.items[0].title)", "WATER PLANTS"),
+            ("retriever.reminders.data.count + 1", "3"),
+            ('COUNT(retriever.reminders.data.items) & " due"', "2 due"),
+            ('IF(retriever.error = "", "ok", retriever.error)', "ok"),
+            ('JOIN(retriever.reminders.data.items, ", ", "title")', "water plants, call dentist"),
+        ],
+    )
+    def test_any_other_definition_is_a_formula_whose_result_is_text(self, definition, value):
+        assert retriever.define(rows(("v", definition)), CONTEXT) == {"v": value}
+
+    @pytest.mark.parametrize(
+        ("definition", "code"),
+        [
+            ("retriever.reminders.data.items.9.title", "#REF"),
+            ("retriever.nosuch", "#REF"),
+            ("reminders.data.count", "#REF"),
+            ("weather.temperature", "#REF"),
+            ("UPPER(retriever.reminders.data.items[9].title)", "#REF"),
+            ("retriever.reminders.data.count +", "#SYNTAX:32"),
+        ],
+    )
+    def test_a_failed_definition_gives_its_default_or_else_the_error_code(self, definition, code):
+        assert retriever.define(rows(("v", definition)), CONTEXT) == {"v": code}
+        assert retriever.define(rows(("v", definition), default="none"), CONTEXT) == {"v": "none"}
+
+    def test_a_default_is_not_used_when_the_definition_works(self):
+        assert retriever.define(rows(("v", "retriever.reminders.data.count"), default="none"), CONTEXT) == {"v": 2}
+        assert retriever.define(rows(("v", "retriever.error"), default="none"), CONTEXT) == {"v": ""}
+        # Text that merely starts with # is a result, not an error.
+        assert retriever.define(rows(("v", '"#1 of " & retriever.reminders.data.count'), default="none"), CONTEXT) == {
+            "v": "#1 of 2"
+        }
+
+    def test_a_list_of_objects_is_built_field_by_field(self):
+        defined = retriever.define(
+            rows(
+                ("todo[x].what", "retriever.reminders.data.items[x].title"),
+                ("todo[x].shout", "UPPER(retriever.reminders.data.items[x].title)"),
+                ("todo[x].urgent", 'IF(retriever.reminders.data.items[x].priority = 1, "!", "")'),
+            ),
+            CONTEXT,
+        )
+        assert defined == {
+            "todo": [
+                {"what": "water plants", "shout": "WATER PLANTS", "urgent": "!"},
+                {"what": "call dentist", "shout": "CALL DENTIST", "urgent": ""},
+            ]
+        }
+
+    def test_a_list_of_plain_values(self):
+        assert retriever.define(rows(("titles[x]", "retriever.reminders.data.items[x].title")), CONTEXT) == {
+            "titles": ["water plants", "call dentist"]
+        }
+        assert retriever.define(rows(("letters[x]", "UPPER(retriever.tags.data[x])")), CONTEXT) == {
+            "letters": ["A", "B", "C"]
+        }
+
+    def test_a_list_element_keeps_its_type_when_the_definition_is_only_a_path(self):
+        assert retriever.define(rows(("p[x]", "retriever.reminders.data.items[x].priority")), CONTEXT) == {"p": [1, 0]}
+        assert retriever.define(rows(("whole[x]", "retriever.reminders.data.items[x]")), CONTEXT) == {"whole": ITEMS}
+
+    def test_two_lists_in_one_definition_give_as_many_elements_as_the_shorter(self):
+        defined = retriever.define(
+            rows(("pair[x]", 'retriever.tags.data[x] & ":" & retriever.reminders.data.items[x].title')), CONTEXT
+        )
+        assert defined == {"pair": ["a:water plants", "b:call dentist"]}
+
+    @pytest.mark.parametrize(
+        "definition",
+        ["retriever.reminders.data.count", "retriever.nosuch[x].title", "retriever.reminders.data[x]", '"fixed"'],
+    )
+    def test_a_list_with_nothing_to_index_is_empty(self, definition):
+        assert retriever.define(rows(("empty[x].f", definition)), CONTEXT) == {"empty": []}
+
+    def test_a_missing_field_in_one_element_gets_the_default(self):
+        context = {"retriever": {"things": {"data": [{"name": "a"}, {}]}}}
+        defined = retriever.define(rows(("t[x].name", "retriever.things.data[x].name"), default="?"), context)
+        assert defined == {"t": [{"name": "a"}, {"name": "?"}]}
+
+    def test_definitions_read_the_servers_values_never_another_rows(self):
+        """So rows cannot depend on each other, and their order does not matter."""
+        both = rows(("a", "retriever.reminders.data.count"), ("b", "retriever.a"))
+        assert retriever.define(both, CONTEXT) == {"a": 2, "b": "#REF"}
+        assert retriever.define(both[::-1], CONTEXT) == {"a": 2, "b": "#REF"}
+
+    def test_a_row_may_take_a_servers_name_and_still_be_defined_from_it(self):
+        defined = retriever.define(rows(("reminders[x]", "retriever.reminders.data.items[x].title")), CONTEXT)
+        assert defined == {"reminders": ["water plants", "call dentist"]}
+
+    @pytest.mark.parametrize(
+        "junk",
+        [None, "", "not rows", 7, [None, "x", 7, {}, {"variable": "v"}, {"definition": "1"}, {"variable": "9bad", "definition": "1"}]],
+    )
+    def test_rows_that_are_not_rows_define_nothing(self, junk):
+        assert retriever.define(junk, CONTEXT) == {}
+
+    @pytest.mark.parametrize(
+        ("name", "parsed"),
+        [
+            ("due", ("due", [])),
+            (" due_today2 ", ("due_today2", [])),
+            ("todo[x]", ("todo", [("index", "x")])),
+            ("todo[x].what", ("todo", [("index", "x"), ("key", "what")])),
+            ("todo[row].a.b", ("todo", [("index", "row"), ("key", "a"), ("key", "b")])),
+            ("grid[x][y]", ("grid", [("index", "x"), ("index", "y")])),
+            (
+                "lists[x].items[y].what",
+                ("lists", [("index", "x"), ("key", "items"), ("index", "y"), ("key", "what")]),
+            ),
+            ("todo.x.what", None),
+            ("todo.what", None),
+            ("todo[0].what", None),
+            ("todo[*].what", None),
+            ("todo[x].items[x]", None),  # one parameter cannot be two positions
+            ("todo[retriever]", None),
+            ("2do", None),
+            ("", None),
+            (None, None),
+        ],
+    )
+    def test_names(self, name, parsed):
+        assert retriever.parse_variable(name) == parsed
+
+
+NESTED = {
+    "retriever": {
+        "todo": {
+            "error": "",
+            "data": {
+                "lists": [
+                    {"name": "Home", "items": [{"title": "water plants"}, {"title": "feed cat"}]},
+                    {"name": "Work", "items": [{"title": "send report"}]},
+                    {"name": "Empty", "items": []},
+                ]
+            },
+        }
+    }
+}
+
+
+class TestListParameters:
+    """A parameter in brackets is the position of each element: an index in brackets, a number when bare."""
+
+    def test_a_parameter_is_a_number_in_the_definition(self):
+        defined = retriever.define(
+            rows(
+                ("todo[x].line", '(x + 1) & ". " & retriever.reminders.data.items[x].title'),
+                ("todo[x].position", "x"),
+                ("todo[x].last", 'IF(x = COUNT(retriever.reminders.data.items) - 1, "last", "")'),
+            ),
+            CONTEXT,
+        )
+        assert defined == {
+            "todo": [
+                {"line": "1. water plants", "position": "0", "last": ""},
+                {"line": "2. call dentist", "position": "1", "last": "last"},
+            ]
+        }
+
+    def test_the_parameters_name_is_the_users_choice(self):
+        defined = retriever.define(
+            rows(("todo[row].n", "row + 1"), ("todo[row].what", "retriever.reminders.data.items[row].title")), CONTEXT
+        )
+        assert defined == {"todo": [{"n": "1", "what": "water plants"}, {"n": "2", "what": "call dentist"}]}
+
+    def test_a_row_that_indexes_nothing_adds_to_the_elements_the_other_rows_gave(self):
+        """Brackets decide how many elements there are; a row without them cannot say."""
+        assert retriever.define(rows(("n[x]", "x + 1")), CONTEXT) == {"n": []}
+        both = rows(("todo[x].n", "x + 1"), ("todo[x].what", "retriever.reminders.data.items[x].title"))
+        expected = {"todo": [{"what": "water plants", "n": "1"}, {"what": "call dentist", "n": "2"}]}
+        assert retriever.define(both, CONTEXT) == expected
+        assert retriever.define(both[::-1], CONTEXT) == expected  # whichever order the rows are in
+
+    def test_lists_nest_each_with_its_own_parameter(self):
+        defined = retriever.define(
+            rows(
+                ("lists[x].name", "retriever.todo.data.lists[x].name"),
+                ("lists[x].items[y].what", "retriever.todo.data.lists[x].items[y].title"),
+                ("lists[x].items[y].label", '(x + 1) & "." & (y + 1) & " " & UPPER(retriever.todo.data.lists[x].items[y].title)'),
+            ),
+            NESTED,
+        )
+        assert defined == {
+            "lists": [
+                {
+                    "name": "Home",
+                    "items": [
+                        {"what": "water plants", "label": "1.1 WATER PLANTS"},
+                        {"what": "feed cat", "label": "1.2 FEED CAT"},
+                    ],
+                },
+                {"name": "Work", "items": [{"what": "send report", "label": "2.1 SEND REPORT"}]},
+                {"name": "Empty", "items": []},
+            ]
+        }
+
+    def test_a_list_of_lists(self):
+        defined = retriever.define(rows(("grid[x][y]", "retriever.todo.data.lists[x].items[y].title")), NESTED)
+        assert defined == {"grid": [["water plants", "feed cat"], ["send report"], []]}
+
+    def test_an_inner_list_of_plain_values(self):
+        defined = retriever.define(rows(("lists[x].titles[y]", "retriever.todo.data.lists[x].items[y].title")), NESTED)
+        assert defined == {
+            "lists": [{"titles": ["water plants", "feed cat"]}, {"titles": ["send report"]}, {"titles": []}]
+        }
+
+    def test_fields_below_a_parameter_may_nest(self):
+        defined = retriever.define(rows(("lists[x].info.name", "retriever.todo.data.lists[x].name")), NESTED)
+        assert defined == {"lists": [{"info": {"name": "Home"}}, {"info": {"name": "Work"}}, {"info": {"name": "Empty"}}]}
+
+    def test_the_outer_parameter_can_be_used_inside_the_inner_list(self):
+        defined = retriever.define(
+            rows(("lists[x].items[y]", 'retriever.todo.data.lists[x].name & ": " & retriever.todo.data.lists[x].items[y].title')),
+            NESTED,
+        )
+        assert defined["lists"][0] == {"items": ["Home: water plants", "Home: feed cat"]}
+
+    def test_a_bare_parameter_keeps_working_beside_a_pure_path(self):
+        """A definition that is only the parameter is a number, not a path to look up."""
+        assert retriever.define(rows(("p[x]", "x")), {"retriever": {}, "x": "wrong"}) == {"p": []}
+        defined = retriever.define(rows(("p[x].i", "x"), ("p[x].t", "retriever.tags.data[x]")), CONTEXT)
+        assert defined == {"p": [{"i": "0", "t": "a"}, {"i": "1", "t": "b"}, {"i": "2", "t": "c"}]}
+
+
+class TestValueErrors:
+    @pytest.mark.parametrize(
+        "good",
+        [
+            None,
+            [],
+            rows(("due", "retriever.reminders.data.count")),
+            rows(("first", "UPPER(retriever.reminders.data.items[0].title)")),
+            rows(("todo[x].what", "retriever.reminders.data.items[x].title"), ("todo[x].when", "retriever.reminders.data.items[x].due")),
+            rows(("titles[x]", "UPPER(retriever.reminders.data.items[x].title)")),
+            rows(("todo[x].line", '(x + 1) & ". " & retriever.reminders.data.items[x].title')),
+            rows(("lists[x].items[y].what", "retriever.todo.data.lists[x].items[y].title")),
+            rows(("grid[row][col]", '(row + col) & retriever.a.data[row].b[col]')),
+            rows(("todo[x].n", "x + 1"), ("todo[x].what", "retriever.reminders.data.items[x].title")),
+        ],
+    )
+    def test_good_rows(self, good):
+        assert retriever.value_errors(good) == []
+
+    @pytest.mark.parametrize(
+        ("bad", "words"),
+        [
+            ("rows", "must be a list"),
+            (["x"], "is not a row"),
+            (rows(("2do", "1")), "the name must look like"),
+            (rows(("todo.x.what", "retriever.a[x]")), "the name must look like"),
+            (rows(("due", "")), "has no definition"),
+            (rows(("todo[x]", "retriever.reminders.data.count")), "must index a list with [x]"),
+            (rows(("todo[x]", "x + 1")), "must index a list with [x]"),
+            (rows(("due", "retriever.reminders.data.items[x].title")), "needs [x] in the name"),
+            (rows(("todo[x]", "retriever.a[x].b[y]")), "[y] in the definition needs [y] in the name"),
+            (rows(("todo[x].items[y]", "retriever.a[x].b")), "must index a list with [y]"),
+            (rows(("todo[x].items[x]", "retriever.a[x]")), "each parameter used once"),
+            (rows(("todo[*]", "retriever.a[*]")), "the name must look like"),
+            (rows(("todo[x]", "retriever.a[x] +")), "'todo[x]'"),
+            (rows(("due", "retriever.reminders.data.count +")), "'due'"),
+            (rows(("due", "NOSUCHFUNCTION(1)")), "NOSUCHFUNCTION"),
+            (rows(("todo", "1"), ("todo[x]", "retriever.a[x]")), "both as a list and as a single value"),
+        ],
+    )
+    def test_bad_rows(self, bad, words):
+        errors = retriever.value_errors(bad)
+        assert errors and any(words in error for error in errors), errors
+
+    def test_bad_rows_are_reported_when_settings_are_saved(self, manifest):
+        plugin = RetrieverPlugin(manifest)
+        config = {"server_url": "http://192.0.2.10:42511", "key": KEY_B64, "values": rows(("2do", "1"))}
+        assert any("the name must look like" in error for error in plugin.validate_config(config))
+
+
+class TestValuesInAFetch:
+    def configure(self, plugin, server, *pairs, default=""):
+        plugin.config = {"server_url": server.url, "key": KEY_B64, "values": rows(*pairs, default=default)}
+
+    def test_defined_values_sit_beside_the_servers(self, plugin, server):
+        self.configure(
+            plugin,
+            server,
+            ("due", "retriever.reminders.data.count"),
+            ("first", "UPPER(retriever.reminders.data.items[0].title)"),
+            ("todo[x].what", "retriever.reminders.data.items[x].title"),
+            ("who", "retriever.server.name"),
+        )
+        data = plugin.fetch_data().data
+        assert data == {
+            **VALUES,
+            "server": SERVER_INFO,
+            "error": "",
+            "due": 1,
+            "first": "TEST0",
+            "todo": [{"what": "test0"}],
+            "who": "FakeServer",
+        }
+
+    def test_on_a_name_clash_the_users_value_wins(self, plugin, server):
+        self.configure(
+            plugin,
+            server,
+            ("reminders[x]", "retriever.reminders.data.items[x].title"),
+            ("error", 'IF(retriever.error = "", "all well", retriever.error)'),
+            ("server", "retriever.server.version"),
+        )
+        result = plugin.fetch_data()
+        assert result.data == {"reminders": ["test0"], "error": "all well", "server": "9.9"}
+        assert result.error is None  # what FiestaBoard itself is told is not the user's to redefine
+
+    def test_values_are_defined_from_the_defaults_after_a_failed_retrieve(self, plugin, server):
+        self.configure(
+            plugin,
+            server,
+            ("due", "retriever.reminders.data.count"),
+            ("first", "retriever.reminders.data.items[0].title"),
+            ("todo[x].what", "retriever.reminders.data.items[x].title"),
+            ("problem", "retriever.error"),
+            default="-",
+        )
+        plugin.fetch_data()
+        server.refuse(500, "Internal Server Error", [RETRIEVE])
+        result = plugin.fetch_data()
+        assert result.data["due"] == 0
+        assert result.data["first"] == "-"
+        assert result.data["todo"] == []
+        assert result.data["problem"] == "500 Internal Server Error"
+        assert result.error == "500 Internal Server Error"
+
+    def test_values_exist_even_before_the_server_has_been_read(self, plugin, server):
+        self.configure(plugin, server, ("due", "retriever.reminders.data.count"), ("problem", "retriever.error"), default="?")
+        server.stop()
+        data = plugin.fetch_data().data
+        assert data == {"error": "Connection refused; config pending", "due": "?", "problem": "Connection refused; config pending"}
+
+    def test_a_bad_row_does_not_stop_the_fetch(self, plugin, server):
+        self.configure(plugin, server, ("2do", "1"), ("oops", "retriever.reminders.data.count +"), ("due", "retriever.reminders.data.count"))
+        result = plugin.fetch_data()
+        assert result.available is True
+        assert result.data["due"] == 1
+        assert result.data["oops"].startswith("#SYNTAX")
+        assert "2do" not in result.data
+
+
+class TestPreview:
+    """The text for the settings form's "Test & Preview", which core cannot fetch for itself."""
+
+    def test_preview_is_the_servers_values_under_the_name_definitions_use(self, plugin, server):
+        document = json.loads(plugin.get_preview_text())
+        assert document == {"retriever": {**VALUES, "server": SERVER_INFO, "error": ""}}
+        assert server.paths == [SERVER, RETRIEVE]
+
+    def test_a_path_from_the_preview_is_a_definition_that_works(self, plugin, server):
+        document = json.loads(plugin.get_preview_text())
+        # What clicking a value in the preview's tree puts in a row.
+        clicked = "retriever.reminders.data.items[0].title"
+        assert retriever.define(rows(("t", clicked)), document) == {"t": "test0"}
+
+    def test_preview_uses_the_settings_it_is_given_and_changes_nothing(self, plugin, server):
+        plugin.fetch_data()
+        before = plugin._server_config
+        calls = len(server.paths)
+        plugin.get_preview_text()
+        assert plugin._server_config is before
+        assert server.paths[calls:] == [SERVER, RETRIEVE]
+
+    @pytest.mark.parametrize("config", [{}, {"server_url": "http://192.0.2.10:42511"}, {"key": KEY_B64}])
+    def test_preview_asks_for_the_settings_it_needs(self, manifest, config):
+        plugin = RetrieverPlugin(manifest)
+        plugin._config = config
+        with pytest.raises(retriever.PreviewUnavailable, match="Enter the server URL and key first"):
+            plugin.get_preview_text()
+
+    def test_preview_says_why_the_server_gave_nothing(self, plugin, server):
+        server.key = OTHER_KEY
+        with pytest.raises(retriever.PreviewUnavailable, match=r"no response \(wrong key\?\)"):
+            plugin.get_preview_text()
+        server.stop()
+        with pytest.raises(retriever.PreviewUnavailable, match="Connection refused"):
+            plugin.get_preview_text()
+
+    def test_the_reason_never_contains_the_key(self, plugin, server):
+        server.refuse(400, "Stale Timestamp")
+        with pytest.raises(retriever.PreviewUnavailable) as raised:
+            plugin.get_preview_text()
+        assert KEY_B64 not in str(raised.value)
+        assert str(raised.value) == "400 Stale Timestamp"
+
+
 class TestDescribe:
     """Reasons are short, with what distinguishes them first."""
 
@@ -581,6 +1009,13 @@ class TestManifest:
         demo = PluginManifest.from_dict(manifest).demo[device_type]
         assert len(demo.template) == rows
         assert len(demo.line_metadata) == rows
+
+    def test_values_are_edited_with_the_mapper_and_previewed_by_the_plugin(self, manifest):
+        field = manifest["settings_schema"]["properties"]["values"]
+        assert field["ui:widget"] == "json-path-mapper"
+        assert field["ui:options"]["preview"] == "plugin"
+        assert field["ui:options"]["keys"] == {"variable": "variable", "path": "definition", "default": "default"}
+        assert set(field["items"]["properties"]) == {"variable", "definition", "default"}
 
     def test_cryptography_is_a_declared_requirement(self):
         assert "cryptography" in (PLUGIN_DIR / "requirements.txt").read_text().split()

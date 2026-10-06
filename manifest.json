@@ -25,6 +25,26 @@
         "description": "The key the server was installed with: base64 of 32 bytes.",
         "ui:widget": "password"
       },
+      "values": {
+        "type": "array",
+        "title": "Values",
+        "description": "Name your own values, each defined by an expression over the server's data, such as UPPER(retriever.reminders.data.items[0].title). A name with a parameter in brackets, such as todo[x].what, defines a list: in the definition [x] indexes a list and x alone is the position, counting from 0. Parameters nest, as in lists[x].items[y].what.",
+        "ui:widget": "json-path-mapper",
+        "ui:options": {
+          "preview": "plugin",
+          "keys": {"variable": "variable", "path": "definition", "default": "default"}
+        },
+        "items": {
+          "type": "object",
+          "properties": {
+            "variable": {"type": "string", "title": "Variable Name"},
+            "definition": {"type": "string", "title": "Definition"},
+            "default": {"type": "string", "title": "Default Value", "default": ""}
+          },
+          "required": ["variable", "definition"]
+        },
+        "default": []
+      },
       "refresh_seconds": {
         "type": "integer",
         "title": "Refresh Interval (seconds)",
