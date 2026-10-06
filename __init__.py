@@ -90,14 +90,14 @@ class ServerSelfDescription:
     concurrent fetch sees all of one description or all of another.
 
     Attributes:
-        sequence_number: Identifies the config the schemas came from; a
+        config_fingerprint: Identifies the config the schemas came from; a
             retrieve response carrying a different number means it changed.
         source_schemas: {source name: JSON Schema of that source's data}.
         server_info: The server's /server info, passed to templates unchanged.
         protocol_version: The version chosen from the range in server_info.
     """
 
-    sequence_number: int
+    config_fingerprint: int
     source_schemas: dict[str, Any]
     server_info: dict[str, Any]
     protocol_version: int
@@ -159,9 +159,9 @@ def encrypt_request(
         The body, and the random ID in it that the response must echo.
     """
     request_id = secrets.token_hex(16)
-    request = {"ts": int(current_time), "id": request_id}
+    request = {"timestamp": int(current_time), "request_id": request_id}
     if protocol_version is not None:
-        request["protocol"] = protocol_version
+        request["required_protocol_version"] = protocol_version
     plaintext = json.dumps(request).encode()
     nonce = os.urandom(NONCE_LENGTH_BYTES)
     ciphertext = ChaCha20Poly1305(transport_key).encrypt(nonce, plaintext, request_associated_data(endpoint_path))
@@ -175,11 +175,11 @@ def decrypt_response(
     Decrypt a response body and check that it answers one particular request.
 
     Returns:
-        The config sequence number and the data in the response.
+        The config fingerprint and the data in the response.
 
     Raises:
         ValueError: The body was not encrypted with this key for this endpoint,
-            is not JSON, does not echo request_id, or lacks an integer "seq" or
+            is not JSON, does not echo request_id, or lacks an integer "config_fingerprint" or
             an object "data". The message says which.
     """
     try:
@@ -191,14 +191,14 @@ def decrypt_response(
         message = json.loads(plaintext)
     except ValueError:
         raise ValueError("not JSON in response") from None
-    if not isinstance(message, dict) or message.get("id") != request_id:
+    if not isinstance(message, dict) or message.get("request_id") != request_id:
         raise ValueError("wrong ID in response")
-    sequence_number = message.get("seq")
-    if not isinstance(sequence_number, int) or isinstance(sequence_number, bool):
-        raise ValueError("no seq in response")
+    config_fingerprint = message.get("config_fingerprint")
+    if not isinstance(config_fingerprint, int) or isinstance(config_fingerprint, bool):
+        raise ValueError("no config fingerprint in response")
     if not isinstance(message.get("data"), dict):
         raise ValueError("no data in response")
-    return sequence_number, message["data"]
+    return config_fingerprint, message["data"]
 
 
 def reject_reserved_source_names(values_by_source: dict[str, Any]) -> None:
@@ -218,14 +218,14 @@ def choose_protocol_version(server_info: dict[str, Any]) -> int:
     """
     Choose the highest protocol version both sides speak.
 
-    A server's info gives the versions it speaks as "protocol": {"min", "max"},
+    A server's info gives the versions it speaks as "supported_protocol_version_range": {"min", "max"},
     an inclusive range.
 
     Raises:
         ValueError: The info has no usable range, or the range holds none of
             SUPPORTED_PROTOCOL_VERSIONS.
     """
-    offered = server_info.get("protocol")
+    offered = server_info.get("supported_protocol_version_range")
     if not isinstance(offered, dict):
         raise ValueError("no protocol range in server info")
     lowest, highest = offered.get("min"), offered.get("max")
@@ -1095,7 +1095,7 @@ class RetrieverPlugin(PluginBase):
 
         known = self._server_self_description
         try:
-            sequence_number, server_values = self._send_encrypted_request(
+            config_fingerprint, server_values = self._send_encrypted_request(
                 server_url, RETRIEVE_PATH, transport_key, deadline, known.protocol_version
             )
             reject_reserved_source_names(server_values)
@@ -1109,7 +1109,7 @@ class RetrieverPlugin(PluginBase):
             )
 
         server_info = known.server_info
-        if sequence_number != known.sequence_number:
+        if config_fingerprint != known.config_fingerprint:
             # The server's config changed, in either direction. The values
             # just retrieved are good; the server is read again, now or on
             # the next fetch.
@@ -1141,11 +1141,11 @@ class RetrieverPlugin(PluginBase):
         """
         _, server_info = self._send_encrypted_request(server_url, SERVER_INFO_PATH, transport_key, deadline)
         protocol_version = choose_protocol_version(server_info)
-        sequence_number, source_schemas = self._send_encrypted_request(
+        config_fingerprint, source_schemas = self._send_encrypted_request(
             server_url, CONFIG_PATH, transport_key, deadline, protocol_version
         )
         reject_reserved_source_names(source_schemas)
-        return ServerSelfDescription(sequence_number, source_schemas, server_info, protocol_version)
+        return ServerSelfDescription(config_fingerprint, source_schemas, server_info, protocol_version)
 
     def _failed_fetch_result(self, server_url: str, reason: str, known_values: dict[str, Any]) -> PluginResult:
         """
@@ -1227,7 +1227,7 @@ class RetrieverPlugin(PluginBase):
             protocol_version: Named in the request unless None.
 
         Returns:
-            The config sequence number and the data in the server's answer.
+            The config fingerprint and the data in the server's answer.
 
         Raises:
             TimeoutError: The deadline has passed, or passes with no answer.

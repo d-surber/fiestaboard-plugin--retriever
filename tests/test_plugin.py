@@ -47,8 +47,8 @@ SERVER_INFO_PATH, CONFIG_PATH, RETRIEVE_PATH = retriever.SERVER_INFO_PATH, retri
 TRANSPORT_KEY = bytes(range(32))
 ENCODED_TRANSPORT_KEY = base64.b64encode(TRANSPORT_KEY).decode()
 ANOTHER_TRANSPORT_KEY = bytes(range(1, 33))
-SEQUENCE_NUMBER = 7
-SERVER_INFO = {"name": "FakeServer", "version": "9.9", "protocol": {"min": 1, "max": 1}, "extra": ["anything", 1]}
+CONFIG_FINGERPRINT = 7
+SERVER_INFO = {"name": "FakeServer", "version": "9.9", "supported_protocol_version_range": {"min": 1, "max": 1}, "extra": ["anything", 1]}
 SOURCE_SCHEMAS = {
     "reminders": {
         "type": "object",
@@ -79,7 +79,7 @@ class FakeServer:
 
     def __init__(self):
         self.transport_key = TRANSPORT_KEY
-        self.sequence_number = SEQUENCE_NUMBER
+        self.config_fingerprint = CONFIG_FINGERPRINT
         self.server_info = SERVER_INFO
         self.source_schemas = SOURCE_SCHEMAS
         self.server_values = SERVER_VALUES
@@ -115,7 +115,7 @@ class FakeServer:
                     self.answer(200, "OK", fake.replacement_reply(self.path, request))
                     return
                 data = {SERVER_INFO_PATH: fake.server_info, CONFIG_PATH: fake.source_schemas, RETRIEVE_PATH: fake.server_values}[self.path]
-                self.answer(200, "OK", fake.encrypted_response(self.path, {"id": request["id"], "seq": fake.sequence_number, "data": data}))
+                self.answer(200, "OK", fake.encrypted_response(self.path, {"request_id": request["request_id"], "config_fingerprint": fake.config_fingerprint, "data": data}))
 
             def say_nothing(self):
                 """Close the connection without a response, as a server does for a request it cannot decrypt."""
@@ -219,12 +219,12 @@ class TestRetrieve:
 
     def test_request_carries_a_current_timestamp_and_a_fresh_id(self, plugin, server):
         plugin.fetch_data()
-        request_ids = [request["id"] for request in server.requests]
+        request_ids = [request["request_id"] for request in server.requests]
         assert len(set(request_ids)) == len(request_ids) == 3
         for request in server.requests:
-            assert set(request) - {"protocol"} == {"ts", "id"}
-            assert abs(request["ts"] - time.time()) < 5
-            assert len(request["id"]) == 32
+            assert set(request) - {"required_protocol_version"} == {"timestamp", "request_id"}
+            assert abs(request["timestamp"] - time.time()) < 5
+            assert len(request["request_id"]) == 32
 
     def test_every_request_has_a_new_nonce(self, plugin, server):
         plugin.fetch_data()
@@ -234,7 +234,7 @@ class TestRetrieve:
 
     def test_nothing_readable_is_sent(self, plugin, server):
         plugin.fetch_data()
-        assert all(b"ts" not in body and TRANSPORT_KEY not in body for body in server.request_bodies)
+        assert all(b"timestamp" not in body and TRANSPORT_KEY not in body for body in server.request_bodies)
 
     def test_trailing_slash_in_server_url(self, plugin, server):
         plugin.config = {"server_url": server.url + "/", "api_key": ENCODED_TRANSPORT_KEY}
@@ -285,16 +285,16 @@ class TestRetrieve:
     @pytest.mark.parametrize(
         ("reply", "reason"),
         [
-            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"id": request["id"], "seq": SEQUENCE_NUMBER, "data": SERVER_VALUES}, ANOTHER_TRANSPORT_KEY), "wrong key"),
-            (lambda server, endpoint_path, request: server.encrypted_response(CONFIG_PATH, {"id": request["id"], "seq": SEQUENCE_NUMBER, "data": SERVER_VALUES}), "wrong key"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": SERVER_VALUES}, ANOTHER_TRANSPORT_KEY), "wrong key"),
+            (lambda server, endpoint_path, request: server.encrypted_response(CONFIG_PATH, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": SERVER_VALUES}), "wrong key"),
             (lambda server, endpoint_path, request: server.request_bodies[-1], "wrong key"),
-            (lambda server, endpoint_path, request: json.dumps({"id": request["id"], "seq": SEQUENCE_NUMBER, "data": SERVER_VALUES}).encode(), "wrong key"),
+            (lambda server, endpoint_path, request: json.dumps({"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": SERVER_VALUES}).encode(), "wrong key"),
             (lambda server, endpoint_path, request: b"", "wrong key"),
             (lambda server, endpoint_path, request: encrypt_message(TRANSPORT_KEY, b"not json", retriever.response_associated_data(endpoint_path)), "not JSON"),
-            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"id": "0" * 32, "seq": SEQUENCE_NUMBER, "data": SERVER_VALUES}), "wrong ID"),
-            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"id": request["id"], "data": SERVER_VALUES}), "no seq"),
-            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"id": request["id"], "seq": True, "data": SERVER_VALUES}), "no seq"),
-            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"id": request["id"], "seq": SEQUENCE_NUMBER}), "no data"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": "0" * 32, "config_fingerprint": CONFIG_FINGERPRINT, "data": SERVER_VALUES}), "wrong ID"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "data": SERVER_VALUES}), "no config fingerprint"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": True, "data": SERVER_VALUES}), "no config fingerprint"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT}), "no data"),
         ],
         ids=[
             "sealed with another key",
@@ -304,8 +304,8 @@ class TestRetrieve:
             "empty",
             "not json",
             "another request's id",
-            "no seq",
-            "seq not a number",
+            "no config fingerprint",
+            "fingerprint not a number",
             "no data",
         ],
     )
@@ -331,10 +331,10 @@ class TestServerConfig:
         plugin.fetch_data()
         assert server.requested_paths == [SERVER_INFO_PATH, CONFIG_PATH, RETRIEVE_PATH, RETRIEVE_PATH, RETRIEVE_PATH]
 
-    @pytest.mark.parametrize("new_seq", [SEQUENCE_NUMBER + 1, SEQUENCE_NUMBER - 1, 0])
-    def test_config_is_read_again_when_the_sequence_number_changes(self, plugin, server, new_seq):
+    @pytest.mark.parametrize("new_fingerprint", [CONFIG_FINGERPRINT + 1, CONFIG_FINGERPRINT - 1, 0])
+    def test_config_is_read_again_when_the_fingerprint_changes(self, plugin, server, new_fingerprint):
         plugin.fetch_data()
-        server.sequence_number = new_seq
+        server.config_fingerprint = new_fingerprint
         server.source_schemas = {"reminders": {"type": "object", "default": {"count": -1}}}
         result = plugin.fetch_data()
         assert result.data == {**SERVER_VALUES, "server": SERVER_INFO, "error": ""}
@@ -386,7 +386,7 @@ class TestServerConfig:
 
     def test_values_are_kept_when_the_changed_config_cannot_be_read(self, plugin, server):
         plugin.fetch_data()
-        server.sequence_number = SEQUENCE_NUMBER + 1
+        server.config_fingerprint = CONFIG_FINGERPRINT + 1
         server.refuse(500, "Internal Server Error", [CONFIG_PATH])
         assert_config_pending(plugin.fetch_data(), "500 Internal Server Error", {**SERVER_VALUES, "server": SERVER_INFO})
 
@@ -396,7 +396,7 @@ class TestServerConfig:
 
     def test_a_config_response_cannot_be_passed_off_as_a_retrieve_response(self, plugin, server):
         plugin.fetch_data()
-        server.replacement_reply = lambda path, request: server.encrypted_response(CONFIG_PATH, {"id": request["id"], "seq": SEQUENCE_NUMBER, "data": SOURCE_SCHEMAS})
+        server.replacement_reply = lambda path, request: server.encrypted_response(CONFIG_PATH, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": SOURCE_SCHEMAS})
         assert_retrieve_failed(plugin.fetch_data(), "wrong key")
 
     def test_all_requests_in_one_fetch_share_the_time_budget(self, plugin, server, monkeypatch):
@@ -427,20 +427,20 @@ class TestServerInfo:
     def test_server_request_names_no_protocol_and_the_others_name_the_chosen_one(self, plugin, server):
         plugin.fetch_data()
         by_path = dict(zip(server.requested_paths, server.requests, strict=True))
-        assert "protocol" not in by_path[SERVER_INFO_PATH]
-        assert by_path[CONFIG_PATH]["protocol"] == 1
-        assert by_path[RETRIEVE_PATH]["protocol"] == 1
+        assert "required_protocol_version" not in by_path[SERVER_INFO_PATH]
+        assert by_path[CONFIG_PATH]["required_protocol_version"] == 1
+        assert by_path[RETRIEVE_PATH]["required_protocol_version"] == 1
 
     @pytest.mark.parametrize("offered", [{"min": 1, "max": 1}, {"min": 0, "max": 5}, {"min": 1, "max": 99}])
     def test_chooses_the_highest_protocol_both_sides_speak(self, plugin, server, offered, monkeypatch):
         monkeypatch.setattr(retriever, "SUPPORTED_PROTOCOL_VERSIONS", (1, 2, 3))
-        server.server_info = {**SERVER_INFO, "protocol": offered}
+        server.server_info = {**SERVER_INFO, "supported_protocol_version_range": offered}
         plugin.fetch_data()
-        assert server.requests[-1]["protocol"] == min(3, offered["max"])
+        assert server.requests[-1]["required_protocol_version"] == min(3, offered["max"])
 
     @pytest.mark.parametrize("offered", [{"min": 2, "max": 3}, {"min": 0, "max": 0}, {"min": 5, "max": 2}])
     def test_no_common_protocol(self, plugin, server, offered):
-        server.server_info = {**SERVER_INFO, "protocol": offered}
+        server.server_info = {**SERVER_INFO, "supported_protocol_version_range": offered}
         assert_config_pending(plugin.fetch_data(), "no common protocol")
         assert server.requested_paths == [SERVER_INFO_PATH]
 
@@ -448,10 +448,10 @@ class TestServerInfo:
         "info",
         [
             {"name": "x", "version": "1"},
-            {"protocol": [1, 1]},
-            {"protocol": {"min": 1}},
-            {"protocol": {"min": "1", "max": "1"}},
-            {"protocol": {"min": True, "max": True}},
+            {"supported_protocol_version_range": [1, 1]},
+            {"supported_protocol_version_range": {"min": 1}},
+            {"supported_protocol_version_range": {"min": "1", "max": "1"}},
+            {"supported_protocol_version_range": {"min": True, "max": True}},
         ],
     )
     def test_server_info_without_a_usable_protocol_range(self, plugin, server, info):
@@ -466,7 +466,7 @@ class TestServerInfo:
 
     def test_server_info_is_read_again_with_the_config(self, plugin, server):
         plugin.fetch_data()
-        server.sequence_number = SEQUENCE_NUMBER + 1
+        server.config_fingerprint = CONFIG_FINGERPRINT + 1
         server.server_info = {**SERVER_INFO, "version": "10.0"}
         assert plugin.fetch_data().data["server"]["version"] == "10.0"
 
@@ -1069,8 +1069,8 @@ class TestInterop:
     @pytest.mark.parametrize("path", [SERVER_INFO_PATH, CONFIG_PATH, RETRIEVE_PATH])
     def test_opens_a_response_sealed_by_the_server(self, path):
         vector = INTEROP_VECTORS["responses_from_server"][path]
-        seq, data = retriever.decrypt_response(self.key, bytes.fromhex(vector["body"]), vector["id"], path)
-        assert (seq, data) == (vector["seq"], vector["data"])
+        fingerprint, data = retriever.decrypt_response(self.key, bytes.fromhex(vector["body"]), vector["request_id"], path)
+        assert (fingerprint, data) == (vector["config_fingerprint"], vector["data"])
 
     def test_the_servers_config_gives_every_source_a_default(self):
         """Whatever sources the vectors hold: the plugin's defaults come from the config alone."""
@@ -1087,14 +1087,14 @@ class TestInterop:
         vector = INTEROP_VECTORS["requests_from_plugin"][path]
         body = bytes.fromhex(vector["body"])
         plaintext = ChaCha20Poly1305(self.key).decrypt(body[:12], body[12:], retriever.request_associated_data(path))
-        expected = {"ts": vector["ts"], "id": vector["id"]}
-        if "protocol" in vector:
-            expected["protocol"] = vector["protocol"]
+        expected = {"timestamp": vector["timestamp"], "request_id": vector["request_id"]}
+        if "required_protocol_version" in vector:
+            expected["required_protocol_version"] = vector["required_protocol_version"]
         assert json.loads(plaintext) == expected
 
-        fresh, request_id = retriever.encrypt_request(self.key, vector["ts"], path, vector.get("protocol"))
+        fresh, request_id = retriever.encrypt_request(self.key, vector["timestamp"], path, vector.get("required_protocol_version"))
         plaintext = ChaCha20Poly1305(self.key).decrypt(fresh[:12], fresh[12:], retriever.request_associated_data(path))
-        assert json.loads(plaintext) == {**expected, "id": request_id}
+        assert json.loads(plaintext) == {**expected, "request_id": request_id}
 
 
 class TestConnectionSettings:
@@ -1347,11 +1347,11 @@ class TestRowsAgainstTheServer:
         assert retriever.shape_errors(value_rows((name, '"x"')), self.SHAPES) == []
 
     def test_the_shape_of_a_value_in_hand(self):
-        assert retriever.shape_of({"name": "S", "protocol": {"min": 1}, "tags": ["a"], "none": None, "on": True}) == {
+        assert retriever.shape_of({"name": "S", "range": {"min": 1}, "tags": ["a"], "none": None, "on": True}) == {
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
-                "protocol": {"type": "object", "properties": {"min": {"type": "number"}}},
+                "range": {"type": "object", "properties": {"min": {"type": "number"}}},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "none": {},
                 "on": {"type": "boolean"},
@@ -1377,7 +1377,7 @@ class TestSavingChecksTheServer:
             ("reminders.error.detail", "reminders.error as text"),
             ("reminders.data.count.x", "reminders.data.count as a number"),
             ("server.name.x", "server.name as text"),
-            ("server.protocol.min.x", "server.protocol.min as a number"),
+            ("server.supported_protocol_version_range.min.x", "server.supported_protocol_version_range.min as a number"),
             ("error.code", "error as text"),
         ],
     )

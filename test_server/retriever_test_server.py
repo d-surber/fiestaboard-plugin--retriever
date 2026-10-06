@@ -228,9 +228,9 @@ class ListSource:
         """The data of a /config response: the source's schema, under its name."""
         return {self.source_name: self.data_schema(contents or self.read_file())}
 
-    def sequence_number(self, contents: ListFileContents | None = None) -> int:
+    def config_fingerprint(self, contents: ListFileContents | None = None) -> int:
         """
-        The number that identifies the config, sent as "seq" in every response.
+        The number that identifies the config, sent as "config_fingerprint" in every response.
 
         It is the first four bytes of the SHA-256 of the config as compact
         JSON with sorted keys, so it changes when the config's content does
@@ -272,7 +272,7 @@ class ListSource:
         return {
             "name": SERVER_NAME,
             "version": SERVER_VERSION,
-            "protocol": {"min": MIN_PROTOCOL_VERSION, "max": MAX_PROTOCOL_VERSION},
+            "supported_protocol_version_range": {"min": MIN_PROTOCOL_VERSION, "max": MAX_PROTOCOL_VERSION},
             "port": port,
             "file": self.list_file_path,
             "count": element_count,
@@ -361,7 +361,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _check_request(self, plaintext: bytes) -> str:
         """
-        Check a decrypted request: {"ts", "id", "protocol"?}.
+        Check a decrypted request: {"timestamp", "request_id", "required_protocol_version"?}.
 
         Returns:
             The request's ID, for the response to echo.
@@ -374,7 +374,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         """
         try:
             request = json.loads(plaintext)
-            timestamp, request_id = request["ts"], request["id"]
+            timestamp, request_id = request["timestamp"], request["request_id"]
             id_is_usable = isinstance(request_id, str) and 0 < len(request_id) <= MAX_REQUEST_ID_LENGTH
             if not isinstance(timestamp, int) or not id_is_usable:
                 raise ValueError
@@ -384,7 +384,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise _Refuse("Stale Timestamp")
 
         # A request that names no protocol version speaks the first.
-        protocol_version = request.get("protocol", 1)
+        protocol_version = request.get("required_protocol_version", 1)
         if not isinstance(protocol_version, int) or isinstance(protocol_version, bool):
             raise _Refuse("Bad Request")
         is_spoken = MIN_PROTOCOL_VERSION <= protocol_version <= MAX_PROTOCOL_VERSION
@@ -396,7 +396,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         """
         Send the endpoint's data, encrypted, echoing the request's ID.
 
-        The file is read once, and the data and the sequence number both
+        The file is read once, and the data and the fingerprint both
         come from that reading. Only /retrieve moves the list on.
         """
         source = self.server.source
@@ -410,7 +410,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             entry, log_note = source.next_entry(contents)
             data = {source.source_name: entry}
 
-        message = {"id": request_id, "seq": source.sequence_number(contents), "data": data}
+        message = {"request_id": request_id, "config_fingerprint": source.config_fingerprint(contents), "data": data}
         nonce = os.urandom(NONCE_LENGTH_BYTES)
         ciphertext = self.server.cipher.encrypt(
             nonce, json.dumps(message).encode(), response_associated_data(self.path)

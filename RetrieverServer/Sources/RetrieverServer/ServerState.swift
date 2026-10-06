@@ -56,7 +56,7 @@ final class ServerState {
     func refresh(now: Date = Date(), retryingModules: Bool = false, waiting: Bool = false) -> Bool {
         let latest = ModuleConfigStore.load(from: directory, builtInKey: builtInKey, now: now)
         warn(latest, now: now)
-        let state = "\(ModuleConfigStore.fingerprint(of: directory))|\(latest)"
+        let state = "\(ModuleConfigStore.changeStamp(of: directory))|\(latest)"
         let configChanged = state != lastSeen
         guard configChanged || (retryingModules && hasUnreachedModules) else { return false }
         if configChanged, case .invalid(let reason) = latest { log("Module config: \(reason); no modules loaded") }
@@ -110,10 +110,10 @@ final class ServerState {
             if !isFirstOfItsName { log("A second source named \(source.name) is not served") }
             return isFirstOfItsName
         }
-        guard updated.map(\.name) != sources.map(\.name) || SourceConfig(sources: updated).sequenceNumber != sourceConfig.sequenceNumber else { return false }
+        guard updated.map(\.name) != sources.map(\.name) || SourceConfig(sources: updated).fingerprint != sourceConfig.fingerprint else { return false }
         sources = updated
         sourceConfig = SourceConfig(sources: sources)
-        log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(sourceConfig.sequenceNumber)")
+        log("Sources: \(sources.map(\.name).joined(separator: ", ")); config \(sourceConfig.fingerprint)")
         return true
     }
 

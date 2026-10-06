@@ -11,16 +11,16 @@ struct SourceConfig {
 
     /// Changes whenever the schemas do; sent with every response so the
     /// plugin knows to read the config again. Only inequality is meaningful.
-    let sequenceNumber: UInt32
+    let fingerprint: UInt32
 
     init(sources: [Source]) {
         schemas = Dictionary(sources.map { ($0.name, $0.schema) }, uniquingKeysWith: { first, _ in first })
-        sequenceNumber = SourceConfig.sequenceNumber(of: schemas)
+        fingerprint = SourceConfig.fingerprint(of: schemas)
     }
 
     /// The first four bytes of the SHA-256 of the schemas in canonical form:
     /// compact JSON with sorted keys, so that key order and layout do not count.
-    static func sequenceNumber(of schemas: [String: JSON]) -> UInt32 {
+    static func fingerprint(of schemas: [String: JSON]) -> UInt32 {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let canonical = (try? encoder.encode(schemas)) ?? Data()

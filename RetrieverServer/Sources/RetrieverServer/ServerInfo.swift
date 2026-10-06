@@ -1,7 +1,7 @@
 import Foundation
 import RetrieverSourceKit
 
-/// What /server reports about this server. `name`, `version` and `protocol`
+/// What /server reports about this server. `name`, `version` and `supported_protocol_version_range`
 /// are required of every server; `os`, `host` and `port` are well known but
 /// optional; a server may add anything else.
 enum ServerInfo {
@@ -14,7 +14,7 @@ enum ServerInfo {
         return [
             "name": .string(name),
             "version": .string(version),
-            "protocol": ["min": .int(Wire.protocolVersions.lowerBound), "max": .int(Wire.protocolVersions.upperBound)],
+            "supported_protocol_version_range": ["min": .int(Wire.protocolVersions.lowerBound), "max": .int(Wire.protocolVersions.upperBound)],
             "os": .string("macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"),
             "host": .string(hostName()),
             "port": .int(Int(port)),

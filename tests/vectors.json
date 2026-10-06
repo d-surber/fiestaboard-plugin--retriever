@@ -1,101 +1,103 @@
 {
-  "_comment": "Messages sealed by each side for the other to open. The key is a test key: bytes 0 to 31. The server's responses come from stand-in sources defined in its tests (numbers, words), not from its real ones, so adding or changing a source does not invalidate this file. Read by tests/test_plugin.py and by RetrieverServer's tests.",
-  "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  "requests_from_plugin": {
-    "/server": {
-      "ts": 1800000000,
-      "id": "42e792a0080a810beed738cf63e22811",
-      "body": "0efd592f7f1ff4719360f3de8ffc8091b3a77232d2f7a480ed1f5fb3c724700ed0ddae525882b583b1d929823b7a18507327f17d3a870190cc0622c4230317d17c64d9253fea5e4a3df1273d11121d7a5294d6c109632f8e"
+  "_comment" : "Messages sealed by each side for the other to open. The key is a test key: bytes 0 to 31. The server's responses come from stand-in sources defined in its tests (numbers, words), not from its real ones, so adding or changing a source does not invalidate this file. Read by tests/test_plugin.py and by RetrieverServer's tests.",
+  "key" : "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "requests_from_plugin" : {
+    "/config" : {
+      "body" : "5e1f4eba898e6b2b97e38164cc24b81599932a4814a2d748d712bf01a5df8547098cd835b2a8473b0d7e7c0ef27b3ec8228ea64b0789bcfae585227a62284e297616ce43a0a66ddee70b89be5573012557bf5a1505136f212775e45f4be103a5f8b05eb44ba317cc6fcbb91c29b66c78bd2cb1fdfbda7209d7ec9143572c9799b75a7e2acda59c",
+      "request_id" : "ac060df476f5da844582694e96810e93",
+      "required_protocol_version" : 1,
+      "timestamp" : 1800000000
     },
-    "/config": {
-      "ts": 1800000000,
-      "id": "48c5d1098d67aa830f7c8db1c49b50b4",
-      "body": "c6ac1e9e4338f36e3e1331d23d733990f9455cae75c9d1f50c6ee9f975245d9c7e47adbe7a89a98b1455f1107f85aafd38cf88643f9bc7f2c276c832bcd5842fddeb7c21ab76b087ff30e7a3178979babdedaae1c62136e8b974a58cb670d6c1ea5b38ae0eed04",
-      "protocol": 1
+    "/retrieve" : {
+      "body" : "e76741c7dddd4471528c32ddde2ecfd5c6e53a405fd2c04b7f3123be2efa9a58e4f3ef4bb8bd000288d13ed6a1f5d5a6cbea69a3efb19a349fbe12b778786a82c82bde6c260f7ce1dd318b54d4e596486d4719a3d11036c3e7b15d9395db99f199d60718d0e9d3bc5e4e77abde86570fa59c0208d021470e9ae380cbb949a202659c72bf1d36e0",
+      "request_id" : "241b1ec5312cfbd3d37ee425611cf63d",
+      "required_protocol_version" : 1,
+      "timestamp" : 1800000000
     },
-    "/retrieve": {
-      "ts": 1800000000,
-      "id": "feaf477a0ff97d46d801a2eadf3983a6",
-      "body": "5f22ee9eb1d212556cbfcaa49cd450236d84f6b30416223d321e3d341d79d5842d688eb14ad503ba0e0573b81dfc7303fd13d268a590c934a65e9cf86c5fb211c9b261652f5a7e8576e257ca276f811174a79b37576c77bfeb3fa9a9aa1ef6ce05a32fa1f564c3",
-      "protocol": 1
+    "/server" : {
+      "body" : "a11c208e51bdb357b8ae4b0ac809b334c2cf48ea0d0e58d689f6be7a2bb6225e2f6c16c2d85b0e3044079fa7873dd339f1f4e9f48febe5f8c827f78bd511d8c2816326710d7e729a7f4e7b01ec978f73985507cf231285b5d2f5e0e5ff0e0bbeef4ccb957afe59",
+      "request_id" : "68735df92e03c7051c5f895d363f6562",
+      "timestamp" : 1800000000
     }
   },
-  "responses_from_server": {
-    "/server": {
-      "id": "00112233445566778899aabbccddeeff",
-      "seq": 1379786758,
-      "body": "f9c897194eeec7d6ca1825ae664273466917dffa87cfff902252a54c1ce4fe4ad72cc6d97260c217f14eb9755b8fa45872416828f52950c6742d33b1c5ad64f169532336dc702623d4037d7e0bccddb2b25f239d801b2893d6d3d4bdb3e256b47ba3f60402a7455b40d0e1aeaa26545f2e8b85ba591b505e52793eb64d063e79c0e1b60bb3f01af725477abcb1a32a9d345cae5a88b883b20fc1a81b287915e997c6b9783d88b7a53ace70c57306c9475a49db00abf7d66dec85bd",
-      "data": {
-        "name": "VectorServer",
-        "version": "1.2.3",
-        "protocol": {
-          "min": 1,
-          "max": 1
-        },
-        "extra": [
-          "anything",
-          1
-        ]
-      }
-    },
-    "/config": {
-      "id": "00112233445566778899aabbccddeeff",
-      "seq": 1379786758,
-      "body": "638e1c5f1cb52a76f45047f7bf21f7ca16f9422a6e4338e41da001f94875341d949d4860a254c16488320c66510cb29412388cbc04ab2d6d739bd33f9513869fb2ce0b26e21806899766eba05b2f996836bab8eea5382f321c1408c1852df479886f4118e178eca973c3f91e7aa09b2623a2c3e918463ba2c24894c54aef72a8ad5f6760b675311bc1357856e3b29ce265477fb06c25bce6073fa6f9c719469611baf517026c303db2d5f131682d260b02e33a2a1c3d1ba89b14bcce00f7f0b6300589856c4cee6f50c6b0a3195fe4e06c5d69df9942071c45e2fe43106988030b2d2b8bc7e71282b933108b04d41a2359fad0055482b3b9ebafecdecc2312049d6a2ec5e3fe2059082da538acebb70819375cdc556847a87537d08a2e0a609a5e014704d589c9f2cc8d81b1ce62bc81a0c354183e7cfdf78f963b3d42ab853856535ff876fa6816367cfc44a784214e2e4e",
-      "data": {
-        "numbers": {
-          "default": {
-            "items": [],
-            "count": 0
+  "responses_from_server" : {
+    "/config" : {
+      "body" : "25db662b8887a98551aecac3d48cdb3ec7b16347a7daca91cb0eaa533a78b9a80540e15604c0fbfd744ae6f2bf642c3b67627ed896ddfcaa6f98e5af6fcaefbd88abd58f59dec52d8a99eae9779c7963537b941ee0cc128b2727f63e5593c09d5c2f6b3e364a8d4f630efb753a2580cc1c733b98778b33538e019d3df159efc57a53c9936ee7b456cfdc7170df13a0003b520c3e8168a46b7fa2fb75a0ee89d2b17b9374e32872c88b29a8c1138d81d9a2e15de6c37afc3ea213b4d3c4e88f30ef12ff599976180778b1d9e176eaa2c2d0c67efce25c4dcd6c74a882e341df815a6f967bd3a4dfa9766ab7da4723cca6d2671f1f99f4b3c285ef9ff7448435fe2fd0170cf39825b54295a8d5a11caf2c1ffbda2cf2e7c880f3c7e9e7e3556d721b17dc000848186fb527b035e5dcc6c77280ef274742249b0a7c5a44a417076a26fc95bf7fe04e9bbafafc868a8feffe2e99e9f171a878fe33b615af7d64f299d44bc7a5d0e8eeb1ad",
+      "config_fingerprint" : 1379786758,
+      "data" : {
+        "numbers" : {
+          "default" : {
+            "count" : 0,
+            "items" : [
+
+            ]
           },
-          "type": "object",
-          "properties": {
-            "count": {
-              "type": "integer"
+          "properties" : {
+            "count" : {
+              "type" : "integer"
             },
-            "items": {
-              "type": "array",
-              "items": {
-                "type": "integer"
-              }
+            "items" : {
+              "items" : {
+                "type" : "integer"
+              },
+              "type" : "array"
             }
-          }
-        },
-        "words": {
-          "default": {
-            "text": ""
           },
-          "type": "object",
-          "properties": {
-            "text": {
-              "type": "string"
+          "type" : "object"
+        },
+        "words" : {
+          "default" : {
+            "text" : ""
+          },
+          "properties" : {
+            "text" : {
+              "type" : "string"
             }
-          }
+          },
+          "type" : "object"
         }
-      }
+      },
+      "request_id" : "00112233445566778899aabbccddeeff"
     },
-    "/retrieve": {
-      "id": "00112233445566778899aabbccddeeff",
-      "seq": 1379786758,
-      "body": "92d463a0cd0a78d8b75ea60eec138d00947f37575646cde7dfb2bfa3a6b79281c14626e643121ed9bd2976842195df638ba3592288b05880adde00662ef338055dd656b78be9f4391c20b5d3b3018b246eed274d580293ea0082b44ef94d78a97381bd383bb9d6f3c030e271203de34a1deaa98bfc5801672f0dd668f4cca977dd230ef0d165389807f735cc122fc443c680889c4b241d89881c01c15010012400a3a54b162c2d116cff9ddd85f660f21528d1cc6bc2261bb033d4a459dc75cf58b84e84204bb4e8b78106",
-      "data": {
-        "numbers": {
-          "data": {
-            "items": [
+    "/retrieve" : {
+      "body" : "9a95e2fe3007e2c82ee4136531bbdeb7a160d7c1f74ec329269421dcf5b1550b64008cc8c7c2723ebe0fbde5e5b884b3c8eb39777720842116e39c5f781d4d05a2c02d43e070ef624604560eb48ed66ebb60f379bb16a86d4d9bdcd1bba11ac08ed28f19e51d8d1b96cf50612fbcf21fae3a3a0bc116a573d9e3779ed0d8c773c27ba52df63816e55687daa7416b756ee1b9cd214162441c21be1eba28e85e57ceff916eb40cd6fe4cf4781f203e751ad8a472163f14dbe47bc17721006df91658a0fef0c6c85ce2fd9b8614f3f84403f8dee038fc957182a2a52575633bb74c07d3",
+      "config_fingerprint" : 1379786758,
+      "data" : {
+        "numbers" : {
+          "data" : {
+            "count" : 2,
+            "items" : [
               1,
               2
-            ],
-            "count": 2
+            ]
           },
-          "error": ""
+          "error" : ""
         },
-        "words": {
-          "data": {
-            "text": "naïve café"
+        "words" : {
+          "data" : {
+            "text" : "naïve café"
           },
-          "error": ""
+          "error" : ""
         }
-      }
+      },
+      "request_id" : "00112233445566778899aabbccddeeff"
+    },
+    "/server" : {
+      "body" : "cd1ae28fa0d24743b2321ce1c08fdc126324d72bd5f53f3459ae45c4b4cdd31365cbb9c53b6c14959420ef67e9dd9b3ab0fad9cf8a63d775f739cc95997766b4a7130ea8698d38d3e8ddf149b3ac55910ae212df9c7534898e6d733c0054500677309d21e3106d6df50acd0f315bf02017f79a5efcd6a86a4333218986e561438a9a9ab678ae89ad27818d1a1fc34b152962f66accb061b80e1519700a0c4759110319279ae9ea47cf42ebc524d0c46328ca8812364d52de6c273133782590175347c56d9065a970bd22784420aacdf50a80c61cc19fedcea342a43d8cacd855001161e9638523acb847",
+      "config_fingerprint" : 1379786758,
+      "data" : {
+        "extra" : [
+          "anything",
+          1
+        ],
+        "name" : "VectorServer",
+        "supported_protocol_version_range" : {
+          "max" : 1,
+          "min" : 1
+        },
+        "version" : "1.2.3"
+      },
+      "request_id" : "00112233445566778899aabbccddeeff"
     }
   }
 }

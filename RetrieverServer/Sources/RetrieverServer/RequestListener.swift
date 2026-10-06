@@ -145,11 +145,11 @@ final class RequestListener {
         // the key, and gets what anyone without the key gets.
         guard answeredRequests.admit(accepted.id, now: Date()) else { return sayNothing(exchange, "request repeated") }
 
-        // The sequence number goes with the sources asked, whatever happens to
+        // The config fingerprint goes with the sources asked, whatever happens to
         // the state while they answer.
-        let sequenceNumber = state.sourceConfig.sequenceNumber
+        let configFingerprint = state.sourceConfig.fingerprint
         func send<Body: Codable>(_ data: Body) {
-            guard let body = try? Wire.seal(response: data, id: accepted.id, sequenceNumber: sequenceNumber, path: path, key: key) else {
+            guard let body = try? Wire.seal(response: data, id: accepted.id, configFingerprint: configFingerprint, path: path, key: key) else {
                 return respond(exchange, path, "500 Internal Server Error")
             }
             respond(exchange, path, "200 OK", body)

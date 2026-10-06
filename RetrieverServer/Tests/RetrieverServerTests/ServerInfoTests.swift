@@ -8,8 +8,8 @@ private let key = SymmetricKey(data: Data(repeating: 7, count: 32))
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
 private func request(_ path: String, protocol requested: Int? = nil) throws -> Data {
-    let field = requested.map { #", "protocol": \#($0)"# } ?? ""
-    let plaintext = Data(#"{"ts": 1800000000, "id": "abc123"\#(field)}"#.utf8)
+    let field = requested.map { #", "required_protocol_version": \#($0)"# } ?? ""
+    let plaintext = Data(#"{"timestamp": 1800000000, "request_id": "abc123"\#(field)}"#.utf8)
     return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestAuthenticatedData(path)).combined
 }
 
@@ -17,7 +17,7 @@ private func request(_ path: String, protocol requested: Int? = nil) throws -> D
     let info = ServerInfo.current(port: 42511)
     #expect(info["name"] == "RetrieverServer")
     #expect(info["version"] == .string(ServerInfo.version))
-    #expect(info["protocol"] == ["min": .int(Wire.protocolVersions.lowerBound), "max": .int(Wire.protocolVersions.upperBound)])
+    #expect(info["supported_protocol_version_range"] == ["min": .int(Wire.protocolVersions.lowerBound), "max": .int(Wire.protocolVersions.upperBound)])
 }
 
 @Test func serverInfoHasTheWellKnownOptionalKeys() {
@@ -69,7 +69,7 @@ func aProtocolOutsideTheRangeIsRefused(path: String) throws {
 }
 
 @Test func serverInfoIsSealedForItsOwnPath() throws {
-    let body = try Wire.seal(response: ServerInfo.current(port: 42511), id: "abc123", sequenceNumber: 7, path: Wire.serverInfoPath, key: key)
+    let body = try Wire.seal(response: ServerInfo.current(port: 42511), id: "abc123", configFingerprint: 7, path: Wire.serverInfoPath, key: key)
     let box = try ChaChaPoly.SealedBox(combined: body)
     #expect(throws: (any Error).self) { try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(Wire.configPath)) }
     let plain = try ChaChaPoly.open(box, using: key, authenticating: Wire.responseAuthenticatedData(Wire.serverInfoPath))

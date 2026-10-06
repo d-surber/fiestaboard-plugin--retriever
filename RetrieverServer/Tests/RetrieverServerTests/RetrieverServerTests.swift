@@ -12,7 +12,7 @@ private func sealed(_ plaintext: String, key: SymmetricKey = key, context: Data 
 }
 
 private func request(ts: Int, id: String = "abc123") -> String {
-    #"{"ts": \#(ts), "id": "\#(id)"}"#
+    #"{"timestamp": \#(ts), "request_id": "\#(id)"}"#
 }
 
 @Test func opensAnAuthenticRequest() throws {
@@ -53,10 +53,10 @@ func refusesBodiesThatAreNotMessages(body: Data) {
 
 @Test(arguments: [
     "not json",
-    #"{"id": "abc123"}"#,
-    #"{"ts": 1800000000}"#,
-    #"{"ts": 1800000000, "id": ""}"#,
-    #"{"ts": 1800000000, "id": "\#(String(repeating: "x", count: 65))"}"#,
+    #"{"request_id": "abc123"}"#,
+    #"{"timestamp": 1800000000}"#,
+    #"{"timestamp": 1800000000, "request_id": ""}"#,
+    #"{"timestamp": 1800000000, "request_id": "\#(String(repeating: "x", count: 65))"}"#,
 ])
 func refusesAuthenticButMalformedRequests(plaintext: String) throws {
     let body = try sealed(plaintext)
@@ -65,16 +65,16 @@ func refusesAuthenticButMalformedRequests(plaintext: String) throws {
 
 @Test func sealsAResponseThatEchoesTheID() throws {
     let values = ["reminders": ["count": 2]]
-    let body = try Wire.seal(response: values, id: "abc123", sequenceNumber: 7, path: Wire.retrievePath, key: key)
+    let body = try Wire.seal(response: values, id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: key)
     let plain = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseAuthenticatedData(Wire.retrievePath))
     let decoded = try JSONDecoder().decode([String: AnyDecodable].self, from: plain)
-    #expect(decoded["id"] == .string("abc123"))
+    #expect(decoded["request_id"] == .string("abc123"))
     #expect(decoded["data"] == .object(["reminders": .object(["count": .int(2)])]))
 }
 
 @Test func usesAFreshNonceForEveryResponse() throws {
-    let first = try Wire.seal(response: ["a": 1], id: "abc123", sequenceNumber: 7, path: Wire.retrievePath, key: key)
-    let second = try Wire.seal(response: ["a": 1], id: "abc123", sequenceNumber: 7, path: Wire.retrievePath, key: key)
+    let first = try Wire.seal(response: ["a": 1], id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: key)
+    let second = try Wire.seal(response: ["a": 1], id: "abc123", configFingerprint: 7, path: Wire.retrievePath, key: key)
     #expect(first.prefix(12) != second.prefix(12))
     #expect(first != second)
 }
@@ -92,8 +92,22 @@ func refusesAuthenticButMalformedRequests(plaintext: String) throws {
 // open. The plugin's tests read the same file.
 
 private struct Vectors: Decodable {
-    struct RequestVector: Decodable { let ts: Int; let id: String; let body: String }
-    struct ResponseVector: Decodable { let id: String; let seq: UInt32; let body: String }
+    struct RequestVector: Decodable {
+        let timestamp: Int
+        let requestID: String
+        let body: String
+
+        enum CodingKeys: String, CodingKey { case timestamp, requestID = "request_id", body }
+    }
+
+    struct ResponseVector: Decodable {
+        let requestID: String
+        let configFingerprint: UInt32
+        let body: String
+
+        enum CodingKeys: String, CodingKey { case requestID = "request_id", configFingerprint = "config_fingerprint", body }
+    }
+
     let key: String
     let requests_from_plugin: [String: RequestVector]    // by path
     let responses_from_server: [String: ResponseVector]  // by path
@@ -132,8 +146,8 @@ private func bytes(hex: String) -> Data {
     let vectors = try Vectors.load()
     let request = try #require(vectors.requests_from_plugin[path])
     let key = try #require(Wire.transportKey(base64: vectors.key))
-    let at = Date(timeIntervalSince1970: TimeInterval(request.ts))
-    #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: key, now: at).id == request.id)
+    let at = Date(timeIntervalSince1970: TimeInterval(request.timestamp))
+    #expect(try Wire.open(request: bytes(hex: request.body), path: path, key: key, now: at).id == request.requestID)
     for other in Wire.endpointPaths where other != path {
         #expect(throws: Wire.Failure.unauthenticated) {
             try Wire.open(request: bytes(hex: request.body), path: other, key: key, now: at)
@@ -143,16 +157,16 @@ private func bytes(hex: String) -> Data {
 
 @Test func retrieveResponseVectorIsWhatTheServerSeals() throws {
     let (vector, decoded) = try Vectors.load().opened(Wire.retrievePath, as: [String: Entry].self)
-    #expect(decoded.id == vector.id)
-    #expect(decoded.sequenceNumber == vector.seq)
-    #expect(decoded.sequenceNumber == SourceConfig(sources: vectorSources).sequenceNumber)
+    #expect(decoded.id == vector.requestID)
+    #expect(decoded.configFingerprint == vector.configFingerprint)
+    #expect(decoded.configFingerprint == SourceConfig(sources: vectorSources).fingerprint)
     #expect(decoded.data == vectorEntries)
 }
 
 @Test func serverResponseVectorIsTheStandInInfo() throws {
     let (vector, decoded) = try Vectors.load().opened(Wire.serverInfoPath, as: [String: JSON].self)
-    #expect(decoded.id == vector.id)
-    #expect(decoded.sequenceNumber == SourceConfig(sources: vectorSources).sequenceNumber)
+    #expect(decoded.id == vector.requestID)
+    #expect(decoded.configFingerprint == SourceConfig(sources: vectorSources).fingerprint)
     #expect(decoded.data == vectorServerInfo)
 }
 
@@ -160,10 +174,10 @@ private func bytes(hex: String) -> Data {
 /// this fails only when the wire format or those stand-ins change.
 @Test func configResponseVectorIsTheStandInConfig() throws {
     let (vector, decoded) = try Vectors.load().opened(Wire.configPath, as: [String: JSON].self)
-    #expect(decoded.id == vector.id)
-    #expect(decoded.sequenceNumber == vector.seq)
+    #expect(decoded.id == vector.requestID)
+    #expect(decoded.configFingerprint == vector.configFingerprint)
     let config = SourceConfig(sources: vectorSources)
-    #expect(decoded.sequenceNumber == config.sequenceNumber)
+    #expect(decoded.configFingerprint == config.fingerprint)
     #expect(decoded.data == config.schemas)
 }
 
@@ -179,4 +193,39 @@ private enum AnyDecodable: Decodable, Equatable {
         else if let value = try? container.decode(Int.self) { self = .int(value) }
         else { self = .object(try container.decode([String: AnyDecodable].self)) }
     }
+}
+
+// MARK: Making the vectors
+//
+// The file has two halves, each made by the side that seals it. This makes
+// the server's half; tests/make_request_vectors.py makes the plugin's. Run
+// both, and only when the wire format or the stand-in sources change:
+//
+//   RETRIEVER_WRITE_VECTORS=1 swift test --filter writesTheServersHalfOfTheVectors
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["RETRIEVER_WRITE_VECTORS"] != nil))
+func writesTheServersHalfOfTheVectors() throws {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("tests/vectors.json")
+    let contents = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+    var file = try #require(contents as? [String: Any])
+    let encodedKey = try #require(file["key"] as? String)
+    let key = try #require(Wire.transportKey(base64: encodedKey))
+    let requestID = "00112233445566778899aabbccddeeff"
+    let config = SourceConfig(sources: vectorSources)
+
+    func vector<Values: Codable>(_ path: String, _ data: Values) throws -> [String: Any] {
+        let body = try Wire.seal(response: data, id: requestID, configFingerprint: config.fingerprint, path: path, key: key)
+        return ["request_id": requestID, "config_fingerprint": config.fingerprint,
+                "body": body.map { String(format: "%02x", $0) }.joined(),
+                "data": try JSONSerialization.jsonObject(with: JSONEncoder().encode(data))]
+    }
+    file["responses_from_server"] = [
+        Wire.serverInfoPath: try vector(Wire.serverInfoPath, vectorServerInfo),
+        Wire.configPath: try vector(Wire.configPath, config.schemas),
+        Wire.retrievePath: try vector(Wire.retrievePath, vectorEntries),
+    ]
+    try JSONSerialization.data(withJSONObject: file, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]).write(to: url)
 }

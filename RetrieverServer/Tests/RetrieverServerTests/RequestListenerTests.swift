@@ -84,7 +84,7 @@ private func httpRequest(_ line: String, body: Data = Data()) -> Data {
 }
 
 private func sealedRequest(path: String, timestamp: Date = Date(), id: String = "abc123") throws -> Data {
-    let plaintext = Data(#"{"ts": \#(Int(timestamp.timeIntervalSince1970)), "id": "\#(id)"}"#.utf8)
+    let plaintext = Data(#"{"timestamp": \#(Int(timestamp.timeIntervalSince1970)), "request_id": "\#(id)"}"#.utf8)
     return try ChaChaPoly.seal(plaintext, using: key, authenticating: Wire.requestAuthenticatedData(path)).combined
 }
 
@@ -109,7 +109,7 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: key, authenticating: Wire.responseAuthenticatedData(path))
         let answer = try JSONDecoder().decode(Wire.Response<JSON>.self, from: plaintext)
         #expect(answer.id == "abc123")
-        #expect(answer.sequenceNumber == running.queue.sync { running.state.sourceConfig.sequenceNumber })
+        #expect(answer.configFingerprint == running.queue.sync { running.state.sourceConfig.fingerprint })
     }
 
     @Test func aRequestThatDecryptsButIsRefusedIsToldWhy() throws {
@@ -142,7 +142,7 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         let running = try RunningListener()
         let client = try ClientConnection(port: running.port)
         let other = SymmetricKey(data: Data(repeating: 8, count: 32))
-        let body = try ChaChaPoly.seal(Data(#"{"ts": \#(Int(Date().timeIntervalSince1970)), "id": "x"}"#.utf8), using: other,
+        let body = try ChaChaPoly.seal(Data(#"{"timestamp": \#(Int(Date().timeIntervalSince1970)), "request_id": "x"}"#.utf8), using: other,
                                        authenticating: Wire.requestAuthenticatedData(Wire.retrievePath)).combined
         client.send(httpRequest("POST /retrieve HTTP/1.1", body: body))
         #expect(client.outcome(within: 5) == .closedWithNothingSent)

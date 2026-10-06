@@ -225,7 +225,7 @@ enum ModuleConfigStore {
     }
 
     /// Changes when any of the files does, so the server can notice a new config.
-    static func fingerprint(of directory: URL) -> String {
+    static func changeStamp(of directory: URL) -> String {
         fileNames.map { name -> String in
             let attributes = try? FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent(name).path)
             let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0

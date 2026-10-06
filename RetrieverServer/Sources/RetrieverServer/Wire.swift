@@ -8,10 +8,11 @@ import Foundation
 // combined form: 12-byte nonce, ciphertext, 16-byte tag. The key is 32
 // random bytes shared with the plugin.
 //
-//   request plaintext:   {"ts": <unix seconds>, "id": "<random>", "protocol": <number, optional>}
-//   response plaintext:  {"id": "<echoed>", "seq": <number>, "data": …}
+//   request plaintext:   {"timestamp": <seconds since 1970>, "request_id": "<random>",
+//                         "required_protocol_version": <number, optional>}
+//   response plaintext:  {"request_id": "<echoed>", "config_fingerprint": <number>, "data": …}
 //
-//   /server data:    {"name", "version", "protocol": {"min", "max"}, …}
+//   /server data:    {"name", "version", "supported_protocol_version_range": {"min", "max"}, …}
 //   /config data:    {"<source>": <JSON Schema of that source's data>, …}
 //   /retrieve data:  {"<source>": {"error": "…", "data": <value>}, …}
 //
@@ -21,7 +22,7 @@ import Foundation
 // no protocol: it has to be answerable before one is chosen.
 //
 // Each source has its own `error`, empty when there was no problem getting
-// its value. `seq` identifies the config; when it differs from the one the
+// its value. `config_fingerprint` identifies the config; when it differs from the one the
 // plugin holds, the plugin reads /config again.
 //
 // A request that does not decrypt gets no response at all: the connection is
@@ -78,14 +79,14 @@ enum Wire {
         }
     }
 
-    /// A request's plaintext. The names on the wire are short; these are not.
+    /// A request's plaintext.
     struct Request: Codable {
         let timestamp: Int   // seconds since 1970, by the sender's clock
         let id: String
         var protocolVersion: Int?
 
         enum CodingKeys: String, CodingKey {
-            case timestamp = "ts", id, protocolVersion = "protocol"
+            case timestamp, id = "request_id", protocolVersion = "required_protocol_version"
         }
     }
 
@@ -98,11 +99,11 @@ enum Wire {
     /// A response's plaintext.
     struct Response<Values: Codable>: Codable {
         let id: String
-        let sequenceNumber: UInt32
+        let configFingerprint: UInt32
         let data: Values
 
         enum CodingKeys: String, CodingKey {
-            case id, sequenceNumber = "seq", data
+            case id = "request_id", configFingerprint = "config_fingerprint", data
         }
     }
 
@@ -130,12 +131,12 @@ enum Wire {
     /// Seals a response for one endpoint.
     /// - Parameters:
     ///   - id: the request's ID, echoed so the plugin knows whose answer this is.
-    ///   - sequenceNumber: identifies the config the plugin should be holding.
+    ///   - configFingerprint: identifies the config the plugin should be holding.
     /// - Throws: if `values` cannot be written as JSON.
-    static func seal<Values: Codable>(response values: Values, id: String, sequenceNumber: UInt32, path: String, key: SymmetricKey) throws -> Data {
+    static func seal<Values: Codable>(response values: Values, id: String, configFingerprint: UInt32, path: String, key: SymmetricKey) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let plain = try encoder.encode(Response(id: id, sequenceNumber: sequenceNumber, data: values))
+        let plain = try encoder.encode(Response(id: id, configFingerprint: configFingerprint, data: values))
         return try ChaChaPoly.seal(plain, using: key, authenticating: responseAuthenticatedData(path)).combined
     }
 }

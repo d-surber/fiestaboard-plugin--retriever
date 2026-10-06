@@ -50,7 +50,7 @@ let vectorSources: [FixedSource] = [
 
 /// The server information in the vectors: a stand-in, like the sources.
 let vectorServerInfo: [String: JSON] = [
-    "name": "VectorServer", "version": "1.2.3", "protocol": ["min": 1, "max": 1], "extra": ["anything", 1],
+    "name": "VectorServer", "version": "1.2.3", "supported_protocol_version_range": ["min": 1, "max": 1], "extra": ["anything", 1],
 ]
 
 /// What `vectorSources` report, as a retrieve response carries it.

@@ -171,21 +171,21 @@ class TestConfig:
         assert result.data["test"] == {"error": "", "data": {"label": "", "count": 0, "items": []}}
         assert result.data["error"] == "Connection refused"
 
-    def test_a_change_of_shape_changes_the_sequence_number_and_the_plugin_reads_the_config_again(self, plugin, running):
+    def test_a_change_of_shape_changes_the_fingerprint_and_the_plugin_reads_the_config_again(self, plugin, running):
         fetched_data(plugin)
-        before = plugin._server_self_description.sequence_number
+        before = plugin._server_self_description.config_fingerprint
         running.write([{"label": "same shape", "count": 5, "items": [{"title": "z", "parts": ["k"]}]}])
         fetched_data(plugin)
-        assert plugin._server_self_description.sequence_number == before  # other values, same shape: nothing to read again
+        assert plugin._server_self_description.config_fingerprint == before  # other values, same shape: nothing to read again
         running.write([{"temperature": 21.5}])
         fetched_data(plugin)
-        assert plugin._server_self_description.sequence_number != before
+        assert plugin._server_self_description.config_fingerprint != before
         assert plugin._server_self_description.source_schemas["test"]["default"] == {"temperature": 0}
 
     def test_server_info(self, plugin, running):
         info = fetched_data(plugin)["server"]
         assert info["name"] == "RetrieverTestServer"
-        assert info["protocol"] == {"min": 1, "max": 1}
+        assert info["supported_protocol_version_range"] == {"min": 1, "max": 1}
         assert info["port"] == running.http_server.server_port
         assert info["count"] == 3
         assert info["file"] == str(running.list_file)
@@ -207,7 +207,7 @@ class TestOneReadingPerResponse:
         fetched_data(plugin)
         assert len(readings) == 3  # /server, /config and /retrieve
 
-    def test_the_element_and_the_sequence_number_agree_when_the_file_changes_between_them(self, plugin, running, monkeypatch):
+    def test_the_element_and_the_fingerprint_agree_when_the_file_changes_between_them(self, plugin, running, monkeypatch):
         """The file is rewritten the moment it has been read, as an editor might do in the middle of a request."""
         fetched_data(plugin)
         source = running.http_server.source
@@ -221,8 +221,8 @@ class TestOneReadingPerResponse:
         monkeypatch.setattr(source, "read_list", read_then_change)
         contents = source.read_file()
         assert source.next_entry(contents)[0]["data"] == ELEMENTS[1]
-        assert source.sequence_number(contents) == plugin._server_self_description.sequence_number
-        assert source.sequence_number() != source.sequence_number(contents)  # the next request sees the new file
+        assert source.config_fingerprint(contents) == plugin._server_self_description.config_fingerprint
+        assert source.config_fingerprint() != source.config_fingerprint(contents)  # the next request sees the new file
 
 
 class TestAwkwardFiles:

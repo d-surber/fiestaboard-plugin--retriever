@@ -187,11 +187,11 @@ private final class Installation {
     let installation = try Installation()
     try installation.install(config(modules: ["local.retriever-source.os"]))
     installation.state.refresh(now: now)
-    let before = installation.state.sourceConfig.sequenceNumber
+    let before = installation.state.sourceConfig.fingerprint
     try installation.install(config(modules: ["local.retriever-source.os", "local.retriever-source.words"]))
     #expect(installation.state.refresh(now: now))
     #expect(installation.names == ["numbers", "module_config", "os", "words"])
-    #expect(installation.state.sourceConfig.sequenceNumber != before)
+    #expect(installation.state.sourceConfig.fingerprint != before)
 }
 
 @Test func aConfigSignedWithTheWrongKeyLoadsNothing() throws {
