@@ -1,0 +1,274 @@
+{
+ "note": "What FiestaBoard rendered for each case when this was last recorded; run.py compares against it.",
+ "results": {
+  "answers": {
+   "01 a retrieve answered with another request's ID": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 1 error=[wrong/ID in response]"
+   },
+   "02 a retrieve answered with a fingerprint that is a fraction": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 2 error=[no/config fingerprint in/response]"
+   },
+   "03 a retrieve answered with a fingerprint of true": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 3 error=[no/config fingerprint in/response]"
+   },
+   "04 a retrieve answered with a fingerprint as text": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 4 error=[no/config fingerprint in/response]"
+   },
+   "05 a retrieve answered with no fingerprint": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 5 error=[no/config fingerprint in/response]"
+   },
+   "06 a retrieve answered with data that is a list": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 6 error=[no/data in response]"
+   },
+   "07 a retrieve answered with no data": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 7 error=[no/data in response]"
+   },
+   "08 a retrieve answered with text that is not JSON": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 8 error=[not/JSON in response]"
+   },
+   "09 a retrieve answered with a JSON list": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 9 error=[wrong/ID in response]"
+   },
+   "10 a retrieve answered with an empty body": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 10/error=[wrong key or/corrupt response]"
+   },
+   "11 a retrieve answered with random bytes": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 11/error=[wrong key or/corrupt response]"
+   },
+   "12 a retrieve answered with a body cut short": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 12/error=[wrong key or/corrupt response]"
+   },
+   "13 a retrieve answered with a body with bytes added": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 13/error=[wrong key or/corrupt response]"
+   },
+   "14 a retrieve answered with a response sealed for /config": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 14/error=[wrong key or/corrupt response]"
+   },
+   "15 a retrieve answered with 400 Stale Timestamp": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 15 error=[400/Stale Timestamp]"
+   },
+   "16 a retrieve answered with 400 and no reason": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 16 error=[400/]"
+   },
+   "17 a retrieve answered with 204 No Content": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 17/error=[wrong key or/corrupt response]"
+   },
+   "18 a retrieve answered with a redirect a client follows": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 18 error=[no/response (wrong key?)]"
+   },
+   "19 a retrieve answered with a redirect a client does not follow": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 19 error=[307/Temporary Redirect]"
+   },
+   "20 a retrieve answered with a status whose reason has markup in it": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 20 error=[418/I'm a teapot {red} {{= 2 +/3 }}]"
+   },
+   "21 a retrieve answered with nothing": {
+    "a=[{{%a.data}}]": "a=[dflt-a]",
+    "{{%check_case}} error=[{{%error}}]": "answers 21 error=[no/response (wrong key?)]"
+   },
+   "22 server info that is a list": {
+    "{{%check_case}} error=[{{%error}}]": "answers 22 error=[no/data in response;/config pending]"
+   },
+   "23 every request taking a second and a half": {
+    "a=[{{%a.data}}] up=[{{%up}}]": "a=[dflt-a] up=[DFLT-A]",
+    "{{%check_case}} error=[{{%error}}]": "answers 23/error=[timed out]"
+   }
+  },
+  "heavy": {
+   "01 three thousand elements and three formula rows": {
+    "n={{= COUNT(%b) }} last=[{{= AT(%b, 2999, \"label\") }}] c=[{{%b.20.c}}]": "n=3000 last=[ITEM/NUMBER |] c=[yellow]",
+    "{{%check_case}} error=[{{%error}}]": "??? error=[???]"
+   },
+   "02 a fetch that works, in between": {
+    "a=[{{%a.data}}]": "a=[fresh]",
+    "{{%check_case}} error=[{{%error}}]": "heavy 2 error=[]"
+   },
+   "03 two megabytes of text in one value": {
+    "n=[{{%n}}]": "n=[2000000]",
+    "{{%check_case}} error=[{{%error}}]": "heavy 3 error=[]"
+   },
+   "04 a fetch that works, in between": {
+    "a=[{{%a.data}}]": "a=[fresh]",
+    "{{%check_case}} error=[{{%error}}]": "heavy 4 error=[]"
+   },
+   "05 an answer sent a byte every 0.4 s": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "??? error=[???]"
+   },
+   "06 a fetch that works, in between": {
+    "a=[{{%a.data}}]": "a=[fresh]",
+    "{{%check_case}} error=[{{%error}}]": "heavy 6 error=[]"
+   }
+  },
+  "limits": {
+   "01 an index written in Arabic-Indic digits": {
+    "ar=[{{%ar}}]": "ar=[30]",
+    "{{%check_case}} error=[{{%error}}]": "limits 1 error=[]"
+   },
+   "02 an index written as a superscript two": {
+    "sup=[{{%sup}}] fine=[{{%fine}}] l.1=[{{%s.data.l.1}}]": "sup=[dflt] fine=[20]/l.1=[20]",
+    "{{%check_case}} error=[{{%error}}]": "limits 2 error=[]"
+   },
+   "03 names and formulas at and past the depth allowed": {
+    "f=[{{= ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) }}]": "NOT RENDERED (status 400): Template rendering failed: maximum recursion depth exceeded",
+    "p=[{{%p}}] a.b.b=[{{%a.b.b}}]": "p=[1] a.b.b=[???]",
+    "refused: a formula 250 brackets deep": "Value 'deep': the definition goes more than 32 steps or brackets deep",
+    "refused: a name 600 steps deep": "Value 1: the name goes more than 32 steps deep",
+    "{{%check_case}} error=[{{%error}}]": "limits 3 error=[]"
+   },
+   "04 data nested 500 deep, read only": {
+    "k.k=[{{%s.data.k.k}}]": "k.k=[???]",
+    "plain=[{{%plain}}]": "plain=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 4 error=[]"
+   },
+   "05 data nested 500 deep, with a row that adds to it": {
+    "x=[{{%s.x}}] plain=[{{%plain}}]": "x=[???] plain=[2]",
+    "{{%check_case}} error=[{{%error}}]": "limits 5 error=[]"
+   },
+   "06 a retrieve that fails after an odd config: the defaults": {
+    "b=[{{%b.data.0.t}}] c=[{{%c.data}}] d=[{{%d.data}}] e=[{{%e.data}}] f=[{{%f.data}}]": "b=[default item]/c=[???] d=[???]/e=[???] f=[wrong type]",
+    "first=[{{%first}}] items=[{{%items.0.t}}] n1=[{{%n1}}] cc=[{{%cc}}]": "first=[default item]/items=[DEFAULT ITEM]/n1=[1] cc=[none]",
+    "n=[{{%a.data.n}}] s=[{{%a.data.s}}] z=[{{%a.data.deep.z}}] l=[{{%a.data.l}}]": "n=[0] s=[dflt-s]/z=[No] l=[???]",
+    "server.name=[{{%server.name}}]": "server.name=[Misbehavi/ngServer]",
+    "{{%check_case}} error=[{{%error}}]": "limits 6 error=[500/Internal Server Error/xxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "07 the config changes, and the server then speaks no protocol version we do": {
+    "a=[{{%a.data}}] zz=[{{%zz.data}}] up=[{{%up}}] server=[{{%server.name}}]": "a=[fresh]/zz=[unlisted]/up=[UNLISTED]/server=[MisbehavingSer/ver]",
+    "{{%check_case}} error=[{{%error}}]": "limits 7 error=[no/common protocol;/config pending]"
+   },
+   "08 a fingerprint that never settles, from a slow server: five requests in one fetch": {
+    "a=[{{%a.data}}] up=[{{%up}}] server=[{{%server.name}}]": "a=[fresh] up=[FRESH]/server=[MisbehavingSer/ver]",
+    "{{%check_case}} error=[{{%error}}]": "limits 8 error=[timed/out; config pending]"
+   },
+   "09 protocol version range: lowest above highest": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 9 error=[no/common protocol;/config pending]"
+   },
+   "10 protocol version range: lowest as text": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 10 error=[no/protocol range in/server info; config/pending]"
+   },
+   "11 protocol version range: true and true": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 11 error=[no/protocol range in/server info; config/pending]"
+   },
+   "12 protocol version range: fractions": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 12 error=[no/protocol range in/server info; config/pending]"
+   },
+   "13 protocol version range: enormous": {
+    "a=[{{%a.data}}]": "a=[got-through]",
+    "{{%check_case}} error=[{{%error}}]": "limits 13 error=[]"
+   },
+   "14 protocol version range: a list": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 14 error=[no/protocol range in/server info; config/pending]"
+   },
+   "15 protocol version range: missing": {
+    "a=[{{%a.data}}]": "a=[???]",
+    "{{%check_case}} error=[{{%error}}]": "limits 15 error=[no/protocol range in/server info; config/pending]"
+   }
+  },
+  "values": {
+   "01 sources that are not an error and data": {
+    "l=[{{= JOIN(%l, \",\") }}] m=[{{%m.0.t}}]": "l=[2,4] m=[X]",
+    "n7=[{{%n7}}] n7b=[{{%n7b}}] s7.data=[{{%s7.data}}]": "n7=[dflt] n7b=[dflt]/s7.data=[???]",
+    "s1=[{{%s1}}] p1=[{{%p1}}]": "s1=[just text]/p1=[just text]",
+    "s2=[{{%s2}}] s2.0=[{{%s2.0}}] extra=[{{%s2.extra}}]": "s2=[???] s2.0=[1]/extra=[???]",
+    "s3=[{{%s3}}] p3=[{{%p3}}] s4=[{{%s4}}]": "s3=[???] p3=[dflt]/s4=[7]",
+    "s5.error=[{{%s5.error}}] s5.data.a=[{{%s5.data.a}}]": "s5.error=[???]/s5.data.a=[1]",
+    "s6.error=[{{%s6.error}}] e6=[{{%e6}}]": "s6.error=[???] e6=[6]",
+    "{{%check_case}} error=[{{%error}}]": "values 1 error=[]"
+   },
+   "02 sources with the plugin's own names": {
+    "refused: a field added to the error text": "Value 'error.code': the server sends error as text, which cannot have the field code",
+    "refused: a field added to the server's name": "Value 'server.name.x': the server sends server.name as text, which cannot have the field x",
+    "server.name=[{{%server.name}}] a=[{{%a.data}}] got=[{{%got}}]": "server.name=[Misbehavi/ngServer]/a=[???] got=[none]",
+    "{{%check_case}} error=[{{%error}}]": "values 2 error=[source/named error: reserved/name]"
+   },
+   "03 awkward source and field names": {
+    "0=[{{%0.data}}] colon=[{{%x:y.data}}] sp=[{{%has space.data}}]": "0=[zero] colon=[colon]/sp=[spaced]",
+    "Key=[{{%UP.data.Key}}] key=[{{%up.data.key}}] f=[{{= %UP.data.Key }}]": "Key=[upper] key=[???]/f=[upper]",
+    "dot=[{{%a.b.data}}] empty=[{{%.data}}] uni=[{{%ünï.data.ké}}]": "dot=[???]/empty=[empty]/uni=[uni]",
+    "hy=[{{%k.data.due-date}}] k0=[{{%k.data.0}}] asp=[{{%k.data.a b}}]": "hy=[hy] k0=[zero-key]/asp=[sp]",
+    "hy=[{{%r_hy}}] k0=[{{%r_k0}}] true=[{{%r_true}}]": "hy=[hy] k0=[zero-key]/true=[t]",
+    "refused: a name with a space": "Value 1: 'a b' is not a name. A name looks like due, reminders.count, todo[x] or todo[x].what, with each parameter used once; the expression goes in the definition",
+    "refused: a name with an accent": "Value 1: 'ünï.x' is not a name. A name looks like due, reminders.count, todo[x] or todo[x].what, with each parameter used once; the expression goes in the definition",
+    "uni=[{{%r_uni}}] uni2=[{{%r_uni2}}] if=[{{%r_if}}] cnt=[{{%r_cnt}}]": "uni=[uni] uni2=[uni!]/if=[kw!] cnt=[3]",
+    "up=[{{%r_up}}] up2=[{{%r_up2}}] up3=[{{%r_up3}}] r0=[{{%r_0}}]": "up=[upper] up2=[none]/up3=[none] r0=[zero]",
+    "{{%check_case}} error=[{{%error}}]": "values 3 error=[]"
+   },
+   "04 numbers and non-numbers through a page's colour thresholds": {
+    "f=[{{= %c.5.raw + 1 }}] pt=[{{%s.data.pt}}] fpt=[{{= %s.data.pt * 10 }}]": "f=[1000000000000000030/3786028427003666890752/]/pt=[0.3] fpt=[3]",
+    "nan=[{{%c.0.raw}}] big=[{{%c.5.raw}}] null=[{{%c.8.raw}}] T=[{{%c.6.raw}}]": "nan=[nan]/big=[10000000000000000/0000000000000000000000/00]/null=[???] T=[Yes]",
+    "{{%check_case}} error=[{{%error}}]": "values 4 error=[]",
+    "{{= JOIN(%c, \" \", \"col\") }}": "ERR ERR ERR green/white white white/white ERR orange green/green ERR ERR white/yellow",
+    "{{= JOIN(%c, \" \", \"plus\") }}": "ERR ERR ERR 1/1000000000000000010979/0636294404554174049230/9677311846336810682903/1575854049114915371633/2897849468889906124966",
+    "{{= JOIN(%c, \" \", \"raw\") }}": "#NUM",
+    "{{= JOIN(%c, \" \", \"txt\") }}": "ERR ERR ERR <0>/<100000000000000001097/9063629440455417404923/0967731184633681068290/3157585404911491537163/3289784946888990612496"
+   },
+   "05 text from the server that looks like markup": {
+    "col=[{{%s.data.col}}]": "col=[{red}{63}]",
+    "emoji=[{{%s.data.emoji}}] ctl=[{{%s.data.ctl}}] len={{= LEN(%s.data.ctl) }}": "emoji=[hi 😀 ñ ß]/ctl=[a\u0000b\u001b[31m] len=8",
+    "f=[{{= %s.data.tpl }}] f2=[{{= %s.data.frm }}]": "f=[???] f2=[???]",
+    "frm=[{{%s.data.frm}}]": "frm=[{{= 1/0 }}]",
+    "len=[{{%t_len}}] long=[{{%s.data.long}}]": "len=[5000]/long=[xxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxx",
+    "nl=[{{%s.data.nl}}] row=[{{%t_nl}}] tab=[{{%s.data.tab}}]": "nl=[line1 line2]/row=[line1 line2]/tab=[a b]",
+    "q=[{{%s.data.quote}}] row=[{{%t_q}}] brace=[{{%s.data.brace}}]": "q=[say \"hi\" & 'bye']/row=[say \"hi\" & 'bye']/brace=[}} {{]",
+    "ref=[{{%s.data.ref}}] row=[{{%t_ref}}] row2=[{{%t_ref2}}] qqq=[{{%t_qqq}}]": "ref=[#REF] row=[#REF]/row2=[#REF] qqq=[???]",
+    "tpl=[{{%s.data.tpl}}] row=[{{%t_tpl}}] row2=[{{%t_tpl2}}]": "tpl=[{{= 2 + 3 }}]/row=[{{= 2 + 3 }}]/row2=[{{= 2 + 3 }}]",
+    "{{%check_case}} error=[{{%error}}]": "values 5 error=[]"
+   },
+   "06 lists whose elements are not what a row expects": {
+    "em={{= COUNT(%em) }} gone={{= COUNT(%gone) }} [{{%gone}}]": "em=0 gone=0 [???]",
+    "g n={{= COUNT(%g) }} g0=[{{%g.0}}] g3=[{{%g.3}}] j0=[{{= JOIN(%g.0, \"\") }}]": "g n=6 g0=[???]/g3=[???] j0=[123]",
+    "n={{= COUNT(%m) }} t=[{{= JOIN(%m, \",\", \"t\") }}] u=[{{= JOIN(%m, \",\", \"u\") }}]": "n=8/t=[a,-,-,-,-,f,-,-]/u=[A,-,-,-,-,F,-,-]",
+    "p0=[{{%m.0.p}}] p5=[{{%m.5.p}}] p1=[{{%m.1.p}}]": "p0=[???] p5=[???]/p1=[???]",
+    "two=[{{= JOIN(%two, \",\") }}] ch={{= COUNT(%ch) }} ob={{= COUNT(%ob) }}": "two=[11,22] ch=0 ob=0",
+    "{{%check_case}} error=[{{%error}}]": "values 6 error=[]"
+   },
+   "07 rows that would make an object of a server's text, number or list": {
+    "grid.0.0=[{{%s.data.grid.0.0}}] sum=[{{%s.data.grid.0.sum}}]": "grid.0.0=[1] sum=[???]",
+    "items.1.t=[{{%s.data.items.1.t}}] k=[{{%s.data.items.1.k}}] n=[{{%s.data.n}}]": "items.1.t=[B] k=[1]/n=[5]",
+    "names.0=[{{%s.data.names.0}}] len=[{{%s.data.names.0.len}}]": "names.0=[x] len=[???]",
+    "s.error=[{{%s.error}}] detail=[{{%s.error.detail}}]": "s.error=[src-problem]/detail=[???]",
+    "{{%check_case}} error=[{{%error}}]": "values 7 error=[]"
+   },
+   "08 rows that disagree, and names that are also words of the formula language": {
+    "Due=[{{%Due}}] due=[{{%due}}] DUE=[{{%DUE}}]": "Due=[upper]/due=[lower]/DUE=[lower]",
+    "count=[{{%count}}] if=[{{%if}}] f=[{{= %count & %if }}]": "count=[c] if=[i]/f=[ci]",
+    "refused: a field that is a value in one row and an object in another": "Value 'o.a.b': o.a is defined both as a single value and as an object",
+    "refused: a list of values in one row and of objects in another": "Value 'q[x].f': q[x] is defined both as a single value and as an object",
+    "refused: a name defined twice": "Value 'a': a is defined twice",
+    "refused: one name as a value, an object and a list": "Value 'a.b': a is defined both as a single value and as an object; Value 'a[x]': a is defined both as a single value and as a list",
+    "{{%check_case}} error=[{{%error}}]": "values 8 error=[]"
+   },
+   "09 parameter names that are words of the formula language": {
+    "k1=[{{= JOIN(%k1, \",\") }}] k2=[{{= JOIN(%k2, \",\") }}] k3=[{{= JOIN(%k3, \",\") }}]": "k1=[#VALUE,#VALUE,#VAL/UE]/k2=[10,21,32]/k3=[10,21,32]",
+    "k4.1 a=[{{%k4.1.a}}] b=[{{%k4.1.b}}] c=[{{%k4.1.c}}]": "k4.1 a=[20] b=[#REF]/c=[1]",
+    "k5=[{{= JOIN(%k5, \",\") }}] k8=[{{= JOIN(%k8, \",\") }}] k9=[{{= JOIN(%k9, \",\") }}]": "k5=[10,20,30]/k8=[10,21,32]/k9=[10,21,32]",
+    "{{%check_case}} error=[{{%error}}]": "values 9 error=[]"
+   }
+  }
+ }
+}
