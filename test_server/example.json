@@ -1,0 +1,43 @@
+[
+  {
+    "label": "first",
+    "count": 2,
+    "items": [
+      {
+        "title": "water plants",
+        "priority": 1,
+        "parts": [
+          "can",
+          "tap"
+        ]
+      },
+      {
+        "title": "call dentist",
+        "priority": 0,
+        "parts": [
+          "phone"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "second",
+    "count": 1,
+    "items": [
+      {
+        "title": "send report",
+        "priority": 0,
+        "parts": [
+          "draft",
+          "review",
+          "send"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "third",
+    "count": 0,
+    "items": []
+  }
+]
