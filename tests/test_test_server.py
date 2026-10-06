@@ -48,7 +48,7 @@ class RunningTestServer:
         self.list_file = tmp_path / "list.json"
         self.write(elements)
         self.log_lines = []
-        self.http_server = test_server.serve(str(self.list_file), TRANSPORT_KEY, 0, log=self.log_lines.append)
+        self.http_server = test_server.create_server(str(self.list_file), TRANSPORT_KEY, 0, log=self.log_lines.append)
         self.url = f"http://127.0.0.1:{self.http_server.server_port}"
         threading.Thread(target=self.http_server.serve_forever, daemon=True).start()
 
@@ -131,7 +131,7 @@ class TestTheList:
     def test_the_source_can_be_named(self, tmp_path):
         file = tmp_path / "list.json"
         file.write_text("[1, 2]")
-        server = test_server.serve(str(file), TRANSPORT_KEY, 0, name="numbers", log=lambda line: None)
+        server = test_server.create_server(str(file), TRANSPORT_KEY, 0, source_name="numbers", log=lambda line: None)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             plugin = retriever.RetrieverPlugin(json.loads((REPOSITORY_ROOT / "manifest.json").read_text()))
@@ -197,13 +197,13 @@ class TestOneReadingPerResponse:
     def test_the_file_is_read_once_for_each_request(self, plugin, running, monkeypatch):
         source = running.http_server.source
         readings = []
-        read_the_file = source.elements
+        read_the_file = source.read_list
 
         def counted():
             readings.append(1)
             return read_the_file()
 
-        monkeypatch.setattr(source, "elements", counted)
+        monkeypatch.setattr(source, "read_list", counted)
         fetched_data(plugin)
         assert len(readings) == 3  # /server, /config and /retrieve
 
@@ -211,18 +211,18 @@ class TestOneReadingPerResponse:
         """The file is rewritten the moment it has been read, as an editor might do in the middle of a request."""
         fetched_data(plugin)
         source = running.http_server.source
-        read_the_file = source.elements
+        read_the_file = source.read_list
 
         def read_then_change():
             elements = read_the_file()
             running.write([{"temperature": 21.5}])
             return elements
 
-        monkeypatch.setattr(source, "elements", read_then_change)
-        contents = source.read()
-        assert source.next(contents)[0]["data"] == ELEMENTS[1]
-        assert source.seq(contents) == plugin._server_self_description.sequence_number
-        assert source.seq() != source.seq(contents)  # the next request sees the new file
+        monkeypatch.setattr(source, "read_list", read_then_change)
+        contents = source.read_file()
+        assert source.next_entry(contents)[0]["data"] == ELEMENTS[1]
+        assert source.sequence_number(contents) == plugin._server_self_description.sequence_number
+        assert source.sequence_number() != source.sequence_number(contents)  # the next request sees the new file
 
 
 class TestAwkwardFiles:
@@ -253,7 +253,7 @@ class TestAwkwardFiles:
 
     def test_numbers_that_are_not_json_are_sent_as_they_are(self, running):
         running.write('[{"reading": NaN, "limit": Infinity}]')
-        data = running.http_server.source.next()[0]["data"]
+        data = running.http_server.source.next_entry()[0]["data"]
         assert data["reading"] != data["reading"]
         assert data["limit"] == float("inf")
 
@@ -363,6 +363,6 @@ class TestTheExample:
 
     def test_the_example_file_is_a_list_the_server_can_serve(self):
         source = test_server.ListSource(str(REPOSITORY_ROOT / "test_server" / "example.json"))
-        elements = source.elements()
+        elements = source.read_list()
         assert len(elements) >= 3
-        assert [source.next()[0]["data"] for _ in elements] == elements
+        assert [source.next_entry()[0]["data"] for _ in elements] == elements
