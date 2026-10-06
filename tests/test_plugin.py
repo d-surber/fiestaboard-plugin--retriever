@@ -295,6 +295,12 @@ class TestRetrieve:
             (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "data": SERVER_VALUES}), "no config fingerprint"),
             (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": True, "data": SERVER_VALUES}), "no config fingerprint"),
             (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT}), "no data"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": 7.0, "data": SERVER_VALUES}), "no config fingerprint"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": "7", "data": SERVER_VALUES}), "no config fingerprint"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": [1]}), "no data"),
+            (lambda server, endpoint_path, request: encrypt_message(TRANSPORT_KEY, b"[]", retriever.response_associated_data(endpoint_path)), "wrong ID"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": SERVER_VALUES})[:-5], "wrong key"),
+            (lambda server, endpoint_path, request: server.encrypted_response(endpoint_path, {"request_id": request["request_id"], "config_fingerprint": CONFIG_FINGERPRINT, "data": SERVER_VALUES}) + b"extra", "wrong key"),
         ],
         ids=[
             "sealed with another key",
@@ -307,6 +313,12 @@ class TestRetrieve:
             "no config fingerprint",
             "fingerprint not a number",
             "no data",
+            "fingerprint a fraction",
+            "fingerprint as text",
+            "data a list",
+            "a JSON list",
+            "cut short",
+            "bytes added",
         ],
     )
     def test_a_response_that_is_not_the_servers_answer(self, plugin, server, reply, reason):
@@ -452,6 +464,8 @@ class TestServerInfo:
             {"supported_protocol_version_range": {"min": 1}},
             {"supported_protocol_version_range": {"min": "1", "max": "1"}},
             {"supported_protocol_version_range": {"min": True, "max": True}},
+            {"supported_protocol_version_range": {"min": 1.0, "max": 1.0}},
+            {"supported_protocol_version_range": None},
         ],
     )
     def test_server_info_without_a_usable_protocol_range(self, plugin, server, info):
@@ -1055,6 +1069,10 @@ class TestDefaultValueForSchema:
             ({"type": "null"}, None),
             ({}, None),
             ("not a schema", None),
+            ({"type": ["string", "null"]}, None),
+            ({"type": "object", "properties": "not properties"}, {}),
+            ({"type": "object", "default": "a default of another type"}, "a default of another type"),
+            ({"type": "object", "properties": {"deep": {"type": "object", "properties": {"z": {"type": "boolean"}}}}}, {"deep": {"z": False}}),
         ],
     )
     def test_default(self, schema, value):
@@ -1424,3 +1442,121 @@ class TestClashAtRunTime:
         context = {"retriever": {"s": {"error": "", "data": {"n": 5, "items": [{"t": "a"}]}}}}
         defined = retriever.build_user_variables(value_rows(("s.data.items[x].k", "x"), ("s.data.n.sub", '"oops"'), ("s.data.extra", '"new"')), context)
         assert defined == {"s": {"error": "", "data": {"n": 5, "items": [{"t": "a", "k": formula_number(0)}], "extra": "new"}}}
+
+
+class TestAwkwardData:
+    """
+    Data a well-behaved server would not send, and names nobody would choose: the plugin copes, and says what it can.
+
+    These came from feeding the plugin a misbehaving server through a whole
+    FiestaBoard (see system_check/). What is tested here is the plugin's own
+    part of each; what FiestaBoard then makes of the values is checked there.
+    """
+
+    def test_a_source_that_is_not_an_error_and_data_passes_through_as_it_is(self, plugin, server):
+        odd = {"text": "just text", "list": [1, 2], "nothing": None, "number": 7, "half": {"data": {"a": 1}}}
+        server.server_values = odd
+        assert plugin.fetch_data().data == {**odd, "server": SERVER_INFO, "error": ""}
+
+    def test_rows_over_sources_that_are_not_an_error_and_data(self):
+        context = {"retriever": {"text": "just text", "list": [1, 2], "nothing": None, "odd": {"error": {"code": 5}, "data": None}}}
+        defined = retriever.build_user_variables(
+            value_rows(
+                ("whole", "retriever.text"),
+                ("none", "retriever.nothing"),
+                ("doubled[x]", "retriever.list[x] * 2"),
+                ("code", "retriever.odd.error.code + 1"),
+                ("no_data", "retriever.odd.data"),
+                ("below_nothing", "retriever.odd.data.x"),
+                ("text.extra", '"added"'),
+                default="none",
+            ),
+            context,
+        )
+        assert defined == {
+            "whole": "just text",
+            "none": "none",
+            "doubled": [formula_number(2), formula_number(4)],
+            "code": formula_number(6),
+            "no_data": "none",
+            "below_nothing": "none",
+        }  # and text is left as the server sent it: a row cannot add a field to a text
+
+    @pytest.mark.parametrize(
+        ("definition", "value"),
+        [
+            ("retriever.UP.data.Key", "upper"),
+            ("retriever.up.data.key", "none"),  # names are matched exactly, case included
+            ("retriever.0.data", "zero"),  # a name that is all digits is still a name, in an object
+            ("retriever.\u00fcn\u00ef.data.k\u00e9", "accented"),
+            ('retriever.\u00fcn\u00ef.data.k\u00e9 & "!"', "accented!"),
+            ("retriever.a.b.data", "none"),  # a source whose name has a dot in it cannot be reached
+            ("COUNT(retriever.count.data)", formula_number(3)),  # a source may be named as a function is
+        ],
+    )
+    def test_awkward_names(self, definition, value):
+        context = {
+            "retriever": {
+                "UP": {"error": "", "data": {"Key": "upper"}},
+                "0": {"error": "", "data": "zero"},
+                "\u00fcn\u00ef": {"error": "", "data": {"k\u00e9": "accented"}},
+                "a.b": {"error": "", "data": "dotted"},
+                "count": {"error": "", "data": [1, 2, 3]},
+            }
+        }
+        assert retriever.build_user_variables(value_rows(("v", definition), default="none"), context) == {"v": value}
+
+    def test_names_that_differ_only_in_case_are_different_variables(self):
+        defined = retriever.build_user_variables(value_rows(("Due", '"upper"'), ("due", '"lower"')), FORMULA_CONTEXT)
+        assert defined == {"Due": "upper", "due": "lower"}
+
+    def test_lists_whose_elements_are_not_what_the_row_expects(self):
+        data = {
+            "mixed": [{"t": "a", "parts": [1, 2]}, "text", None, [9, 8], 5, {"t": "f", "parts": "not a list"}, {"parts": {"k": 1}}, {"t": None}],
+            "grid": [[1, 2, 3], [4], [], "xy", None, {"0": "z"}],
+            "text": "abcdef",
+            "object": {"0": "a", "1": "b"},
+        }
+        context = {"retriever": {"s": {"error": "", "data": data}}}
+        defined = retriever.build_user_variables(
+            value_rows(
+                ("m[x].t", "retriever.s.data.mixed[x].t"),
+                ("m[x].p[y]", "retriever.s.data.mixed[x].parts[y]"),
+                ("g[x][y]", "retriever.s.data.grid[x][y]"),
+                ("letters[x]", "retriever.s.data.text[x]"),
+                ("fields[x]", "retriever.s.data.object[x]"),
+                default="-",
+            ),
+            context,
+        )
+        assert [element["t"] for element in defined["m"]] == ["a", "-", "-", "-", "-", "f", "-", "-"]
+        assert [element["p"] for element in defined["m"]] == [[1, 2], [], [], [], [], [], [], []]
+        assert defined["g"] == [[1, 2, 3], [4], [], [], [], []]
+        assert defined["letters"] == []  # a parameter indexes a list; a text is not one
+        assert defined["fields"] == []  # nor is an object, whatever its fields are called
+
+    def test_a_formula_over_a_list_or_an_object_is_an_error_value(self):
+        context = {"retriever": {"s": {"error": "", "data": {"list": [1], "object": {}}}}}
+        for name in ("list", "object"):
+            assert retriever.build_user_variables(value_rows(("v", f"retriever.s.data.{name} + 1")), context) == {"v": "#VALUE"}
+            assert retriever.build_user_variables(value_rows(("v", f"retriever.s.data.{name} + 1"), default="none"), context) == {"v": "none"}
+
+    def test_text_is_passed_on_exactly_as_the_server_sent_it(self, plugin, server):
+        """Whatever it looks like: the plugin does not interpret a server's text, and must not damage it."""
+        texts = ["{{date_time.day}}", "{{= 1/0 }}", "{red}{63}", "#REF", "???", "line1\nline2", "a\tb", "hi \U0001f600 \u00f1", "a\u0000b", "}} {{", "x" * 5000]
+        server.server_values = {"s": {"error": "", "data": texts}}
+        plugin.config = {**plugin.config, "values": value_rows(("copy[x]", "retriever.s.data[x]"))}
+        data = plugin.fetch_data().data
+        assert data["s"]["data"] == texts
+        assert data["copy"] == texts
+
+    def test_data_nested_very_deeply_does_not_stop_a_fetch(self, plugin, server):
+        deep = "bottom"
+        for _ in range(500):
+            deep = {"k": deep}
+        server.server_values = {"s": {"error": "", "data": deep}}
+        plugin.config = {**plugin.config, "values": value_rows(("s.added", '"x"'), ("near_the_top", "retriever.s.data.k.k"), ("plain", "1 + 1"))}
+        data = plugin.fetch_data().data
+        assert data["error"] == ""
+        assert data["plain"] == formula_number(2)
+        assert data["s"] == {"error": "", "data": deep}  # the row that would have copied it is skipped
