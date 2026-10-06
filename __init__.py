@@ -6,6 +6,7 @@ Fetches data from a companion server and exposes it to templates.
 
 import base64
 import binascii
+import copy
 import http.client
 import json
 import logging
@@ -67,6 +68,19 @@ def request_context(path: str) -> bytes:
 
 def response_context(path: str) -> bytes:
     return f"retriever/1 response {path}".encode()
+
+
+# The setting that holds the key. FiestaBoard hides a setting's value in its
+# API and its forms only if the setting has one of a fixed list of names, and
+# this is one of them. It was called "key" before, which is not; a value
+# stored under the old name is still read, until it is entered again.
+KEY_SETTING = "api_key"
+OLD_KEY_SETTING = "key"
+
+
+def configured_key(config: dict[str, Any]) -> Any:
+    """The key as the settings hold it, under its name or the one it had before."""
+    return config.get(KEY_SETTING) or config.get(OLD_KEY_SETTING)
 
 
 def decode_key(value: Any) -> bytes | None:
@@ -154,13 +168,21 @@ def choose_protocol(server_info: dict[str, Any]) -> int:
 #   lists[x].name            retriever.todo.data.lists[x].name
 #   lists[x].items[y].what   retriever.todo.data.lists[x].items[y].title
 #
+# A name with dots puts the value inside an object, which rows build up field
+# by field. If the object is one of the server's values, the rows add to it:
+#
+#   reminders.count   retriever.reminders.data.count
+#   reminders.next    retriever.reminders.data.items[0].title
+#
+# leaves reminders.error and reminders.data as the server sent them.
+#
 # Every definition reads the server's values, never another row's result, so
 # rows cannot depend on each other and their order does not matter. A row may
-# take the name of one of the server's values, and then it is the row that
-# templates see.
+# take the name of one of the server's values outright, and then it is the
+# row that templates see.
 
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
-_VARIABLE = re.compile(rf"^({_NAME})((?:\[{_NAME}\](?:\.{_NAME})*)*)$")
+_VARIABLE = re.compile(rf"^({_NAME})((?:\[{_NAME}\]|\.{_NAME})*)$")
 _SEGMENT = re.compile(rf"\[({_NAME})\]|\.({_NAME})")
 _PARAMETER = re.compile(rf"\[({_NAME})\]")
 _PATH = re.compile(r"^[A-Za-z_]\w*(?:\.\w+)*$")
@@ -176,8 +198,9 @@ def parse_variable(name: Any) -> tuple[str, list[Step]] | None:
     """
     Split a row's name into its variable and the steps to where the definition's value goes.
 
-    ``due`` has no steps. ``todo[x].what`` has two: each element, then its
-    ``what``. None if it is not a name, or uses one parameter twice.
+    ``due`` has no steps. ``reminders.count`` has one, the field ``count``.
+    ``todo[x].what`` has two: each element, then its ``what``. None if it is
+    not a name, or uses one parameter twice.
     """
     match = _VARIABLE.match(name.strip()) if isinstance(name, str) else None
     if not match:
@@ -187,7 +210,8 @@ def parse_variable(name: Any) -> tuple[str, list[Step]] | None:
         for segment in _SEGMENT.finditer(match.group(2))
     ]
     parameters = [step[1] for step in steps if step[0] == "index"]
-    if len(set(parameters)) != len(parameters) or NAMESPACE in parameters:
+    # A name beginning with the plugin's own name is a definition put in the wrong box.
+    if len(set(parameters)) != len(parameters) or NAMESPACE in parameters or match.group(1) == NAMESPACE:
         return None
     return match.group(1), steps
 
@@ -270,7 +294,14 @@ def _build(
 
 
 def define(rows: Any, context: dict[str, Any]) -> dict[str, Any]:
-    """The variables *rows* define from *context*. Rows that are not rows are skipped."""
+    """
+    The variables *rows* define from *context*. Rows that are not rows are skipped.
+
+    A row that names a field of one of the server's own objects adds to a
+    copy of that object; any other row's variable is the row's alone.
+    """
+    served = context.get(NAMESPACE)
+    served = served if isinstance(served, dict) else {}
     usable = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or not isinstance(row.get("definition"), str):
@@ -287,8 +318,11 @@ def define(rows: Any, context: dict[str, Any]) -> dict[str, Any]:
     # user wrote the rows in never matters.
     defined: dict[str, Any] = {}
     for name, steps, definition, default in sorted(usable, key=lambda row: not says_how_long(row)):
-        # Several rows may each give one part of the same list's elements.
-        defined[name] = _build(steps, definition, context, default, {}, defined.get(name) if steps else None)
+        # Several rows may each give one part of the same object or list.
+        existing = defined.get(name) if steps else None
+        if existing is None and steps and steps[0][0] == "key" and isinstance(served.get(name), dict):
+            existing = copy.deepcopy(served[name])
+        defined[name] = _build(steps, definition, context, default, {}, existing)
     return defined
 
 
@@ -299,7 +333,8 @@ def value_errors(rows: Any) -> list[str]:
     if not isinstance(rows, list):
         return ["Values must be a list"]
     errors = []
-    kinds: dict[str, bool] = {}
+    kinds: dict[str, str] = {}
+    shapes = {"": "a single value", "key": "an object", "index": "a list"}
     # For each list, the parameters some row indexes a list with: those have a length.
     sized: set[tuple[str, str]] = set()
     for row in rows:
@@ -312,15 +347,21 @@ def value_errors(rows: Any) -> list[str]:
             continue
         parsed = parse_variable(row.get("variable"))
         if parsed is None:
-            errors.append(
-                f"Value {number}: the name must look like name, name[x] or name[x].field, with each parameter used once"
-            )
+            given = row.get("variable")
+            if not isinstance(given, str) or not given.strip():
+                errors.append(f"Value {number} has no name: give it one, such as due or todo[x].what")
+            else:
+                errors.append(
+                    f"Value {number}: {given.strip()!r} is not a name. A name looks like due, reminders.count, "
+                    "todo[x] or todo[x].what, with each parameter used once; the expression goes in the definition"
+                )
             continue
         name, steps = parsed
         parameters = [step[1] for step in steps if step[0] == "index"]
         label = f"Value {row['variable'].strip()!r}"
-        if kinds.setdefault(name, bool(steps)) != bool(steps):
-            errors.append(f"{label}: {name} is defined both as a list and as a single value")
+        kind = steps[0][0] if steps else ""
+        if kinds.setdefault(name, kind) != kind:
+            errors.append(f"{label}: {name} is defined both as {shapes[kinds[name]]} and as {shapes[kind]}")
         definition = row.get("definition")
         if not isinstance(definition, str) or not definition.strip():
             errors.append(f"{label} has no definition")
@@ -422,7 +463,7 @@ class RetrieverPlugin(PluginBase):
             return PluginResult(available=False, error="; ".join(errors))
 
         server_url = self.config["server_url"].strip().rstrip("/")
-        key = decode_key(self.config["key"])
+        key = decode_key(configured_key(self.config))
         deadline = time.monotonic() + TIMEOUT_SECONDS
 
         if self._server_config is None:
@@ -476,9 +517,9 @@ class RetrieverPlugin(PluginBase):
         """
         config = self.config
         if self._connection_errors(config):
-            raise PreviewUnavailable("Enter the server URL and key first")
+            raise PreviewUnavailable("Enter the server URL and API key first")
         server_url = config["server_url"].strip().rstrip("/")
-        key = decode_key(config["key"])
+        key = decode_key(configured_key(config))
         deadline = time.monotonic() + TIMEOUT_SECONDS
         try:
             _, server_info = self._fetch(server_url, SERVER_PATH, key, deadline)
@@ -530,9 +571,9 @@ class RetrieverPlugin(PluginBase):
         elif not server_url.strip().lower().startswith(("http://", "https://")):
             errors.append("Server URL must start with http:// or https://")
 
-        if not config.get("key"):
-            errors.append("Key is required")
-        elif decode_key(config["key"]) is None:
-            errors.append("Key must be the base64 of 32 bytes")
+        if not configured_key(config):
+            errors.append("API key is required")
+        elif decode_key(configured_key(config)) is None:
+            errors.append("API key must be the base64 of 32 bytes")
 
         return errors

@@ -66,7 +66,7 @@ def running(tmp_path):
 @pytest.fixture
 def plugin(running):
     plugin = retriever.RetrieverPlugin(json.loads((ROOT / "manifest.json").read_text()))
-    plugin.config = {"server_url": running.url, "key": KEY_B64}
+    plugin.config = {"server_url": running.url, "api_key": KEY_B64}
     return plugin
 
 
@@ -125,7 +125,7 @@ class TestTheList:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             plugin = retriever.RetrieverPlugin(json.loads((ROOT / "manifest.json").read_text()))
-            plugin.config = {"server_url": f"http://127.0.0.1:{server.server_port}", "key": KEY_B64}
+            plugin.config = {"server_url": f"http://127.0.0.1:{server.server_port}", "api_key": KEY_B64}
             assert data(plugin)["numbers"] == {"error": "", "data": 1}
         finally:
             server.shutdown()
@@ -185,7 +185,7 @@ class TestListRows:
     def test_nested_rows_follow_each_element(self, plugin, running):
         plugin.config = {
             "server_url": running.url,
-            "key": KEY_B64,
+            "api_key": KEY_B64,
             "values": [
                 {"variable": "label", "definition": "UPPER(retriever.test.data.label)", "default": ""},
                 {"variable": "things[x].title", "definition": "retriever.test.data.items[x].title", "default": ""},
@@ -248,7 +248,7 @@ class TestRefusals:
 
     def test_a_plugin_with_another_key_gets_no_response(self, running):
         plugin = retriever.RetrieverPlugin(json.loads((ROOT / "manifest.json").read_text()))
-        plugin.config = {"server_url": running.url, "key": base64.b64encode(bytes(32)).decode()}
+        plugin.config = {"server_url": running.url, "api_key": base64.b64encode(bytes(32)).decode()}
         assert plugin.fetch_data().data == {"error": "no response (wrong key?); config pending"}
 
 

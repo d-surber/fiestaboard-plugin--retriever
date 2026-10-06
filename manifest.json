@@ -19,16 +19,16 @@
         "title": "Server URL",
         "description": "Base URL of the Retriever server, e.g. http://192.0.2.10:42511. Use an IP address if the name does not resolve."
       },
-      "key": {
+      "api_key": {
         "type": "string",
-        "title": "Key",
+        "title": "API Key",
         "description": "The key the server was installed with: base64 of 32 bytes.",
         "ui:widget": "password"
       },
       "values": {
         "type": "array",
         "title": "Values",
-        "description": "Name your own values, each defined by an expression over the server's data, such as UPPER(retriever.reminders.data.items[0].title). A name with a parameter in brackets, such as todo[x].what, defines a list: in the definition [x] indexes a list and x alone is the position, counting from 0. Parameters nest, as in lists[x].items[y].what.",
+        "description": "Name your own values, each defined by an expression over the server's data, such as UPPER(retriever.reminders.data.items[0].title). A name with dots, such as reminders.count, is a field of an object. A name with a parameter in brackets, such as todo[x].what, defines a list: in the definition [x] indexes a list and x alone is the position, counting from 0. Parameters nest, as in lists[x].items[y].what.",
         "ui:widget": "json-path-mapper",
         "ui:options": {
           "preview": "plugin",
@@ -58,7 +58,7 @@
         "default": false
       }
     },
-    "required": ["server_url", "key"]
+    "required": ["server_url", "api_key"]
   },
 
   "demo": {

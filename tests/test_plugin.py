@@ -150,7 +150,7 @@ def manifest():
 @pytest.fixture
 def plugin(manifest, server):
     plugin = RetrieverPlugin(manifest)
-    plugin.config = {"server_url": server.url, "key": KEY_B64}
+    plugin.config = {"server_url": server.url, "api_key": KEY_B64}
     return plugin
 
 
@@ -214,7 +214,7 @@ class TestRetrieve:
         assert all(b"ts" not in body and KEY not in body for body in server.bodies)
 
     def test_trailing_slash_in_server_url(self, plugin, server):
-        plugin.config = {"server_url": server.url + "/", "key": KEY_B64}
+        plugin.config = {"server_url": server.url + "/", "api_key": KEY_B64}
         assert plugin.fetch_data().data["error"] == ""
 
     def test_fetch_reports_failure_by_raising(self, plugin, server):
@@ -322,7 +322,7 @@ class TestServerConfig:
 
     def test_config_is_read_again_when_settings_are_saved(self, plugin, server):
         plugin.fetch_data()
-        plugin.config = {"server_url": server.url, "key": KEY_B64, "refresh_seconds": 120}
+        plugin.config = {"server_url": server.url, "api_key": KEY_B64, "refresh_seconds": 120}
         plugin.fetch_data()
         assert server.paths == [SERVER, CONFIG, RETRIEVE, SERVER, CONFIG, RETRIEVE]
 
@@ -598,8 +598,13 @@ class TestValues:
                 "lists[x].items[y].what",
                 ("lists", [("index", "x"), ("key", "items"), ("index", "y"), ("key", "what")]),
             ),
-            ("todo.x.what", None),
-            ("todo.what", None),
+            ("reminders.count", ("reminders", [("key", "count")])),
+            ("a.b.c", ("a", [("key", "b"), ("key", "c")])),
+            ("mine.list[x].what", ("mine", [("key", "list"), ("index", "x"), ("key", "what")])),
+            ("todo.", None),
+            (".todo", None),
+            ("todo..what", None),
+            ("retriever.reminders.data.items[0].title", None),
             ("todo[0].what", None),
             ("todo[*].what", None),
             ("todo[x].items[x]", None),  # one parameter cannot be two positions
@@ -627,6 +632,51 @@ NESTED = {
         }
     }
 }
+
+
+class TestObjects:
+    """A name with dots puts the value inside an object."""
+
+    def test_rows_build_an_object_field_by_field(self):
+        defined = retriever.define(
+            rows(
+                ("mine.count", "retriever.reminders.data.count"),
+                ("mine.next", "UPPER(retriever.reminders.data.items[0].title)"),
+                ("mine.deep.er", "retriever.music.data.state"),
+            ),
+            CONTEXT,
+        )
+        assert defined == {"mine": {"count": 2, "next": "WATER PLANTS", "deep": {"er": "playing"}}}
+
+    def test_a_field_of_one_of_the_servers_objects_is_added_to_it(self):
+        """reminders.count sits beside reminders.error and reminders.data, which stay as sent."""
+        defined = retriever.define(
+            rows(("reminders.count", "retriever.reminders.data.count"), ("reminders.next", "retriever.reminders.data.items[0].title")),
+            CONTEXT,
+        )
+        assert defined == {
+            "reminders": {"error": "", "data": {"count": 2, "items": ITEMS}, "count": 2, "next": "water plants"}
+        }
+
+    def test_the_servers_own_value_is_never_changed(self):
+        before = json.dumps(CONTEXT, sort_keys=True)
+        retriever.define(rows(("reminders.data.count", '"overwritten"'), ("reminders.count", "1")), CONTEXT)
+        assert json.dumps(CONTEXT, sort_keys=True) == before
+
+    def test_a_field_can_replace_one_the_server_sent(self):
+        defined = retriever.define(rows(("reminders.error", '"mine"'), ("reminders.data.count", "retriever.reminders.data.count + 10")), CONTEXT)
+        assert defined["reminders"]["error"] == "mine"
+        assert defined["reminders"]["data"] == {"count": "12", "items": ITEMS}
+
+    def test_a_list_inside_an_object(self):
+        defined = retriever.define(rows(("mine.todo[x].what", "retriever.reminders.data.items[x].title")), CONTEXT)
+        assert defined == {"mine": {"todo": [{"what": "water plants"}, {"what": "call dentist"}]}}
+
+    def test_taking_a_servers_name_outright_still_replaces_it(self):
+        assert retriever.define(rows(("reminders", "retriever.reminders.data.count")), CONTEXT) == {"reminders": 2}
+        assert retriever.define(rows(("reminders[x]", "retriever.reminders.data.items[x].title")), CONTEXT) == {
+            "reminders": ["water plants", "call dentist"]
+        }
 
 
 class TestListParameters:
@@ -727,6 +777,8 @@ class TestValueErrors:
             rows(("lists[x].items[y].what", "retriever.todo.data.lists[x].items[y].title")),
             rows(("grid[row][col]", '(row + col) & retriever.a.data[row].b[col]')),
             rows(("todo[x].n", "x + 1"), ("todo[x].what", "retriever.reminders.data.items[x].title")),
+            rows(("reminders.count", "retriever.reminders.data.count"), ("reminders.next", "retriever.reminders.data.items[0].title")),
+            rows(("mine.count", "retriever.reminders.data.count"), ("mine.todo[x]", "retriever.reminders.data.items[x].title")),
         ],
     )
     def test_good_rows(self, good):
@@ -737,8 +789,14 @@ class TestValueErrors:
         [
             ("rows", "must be a list"),
             (["x"], "is not a row"),
-            (rows(("2do", "1")), "the name must look like"),
-            (rows(("todo.x.what", "retriever.a[x]")), "the name must look like"),
+            (rows(("2do", "1")), "'2do' is not a name"),
+            (rows(("todo.x.what", "retriever.a[x]")), "[x] in the definition needs [x] in the name"),
+            (rows(("todo[0].what", "retriever.a")), "'todo[0].what' is not a name"),
+            (rows(("due", "1"), ("due.soon", "2")), "due is defined both as a single value and as an object"),
+            (rows(("todo.n", "1"), ("todo[x]", "retriever.a[x]")), "todo is defined both as an object and as a list"),
+            (rows(("", "retriever.reminders.data.count")), "Value 1 has no name"),
+            (rows(("  ", "retriever.reminders.data.count")), "Value 1 has no name"),
+            (rows(("retriever.reminders.data.count", "retriever.reminders.data.count")), "the expression goes in the definition"),
             (rows(("due", "")), "has no definition"),
             (rows(("todo[x]", "retriever.reminders.data.count")), "must index a list with [x]"),
             (rows(("todo[x]", "x + 1")), "must index a list with [x]"),
@@ -746,11 +804,11 @@ class TestValueErrors:
             (rows(("todo[x]", "retriever.a[x].b[y]")), "[y] in the definition needs [y] in the name"),
             (rows(("todo[x].items[y]", "retriever.a[x].b")), "must index a list with [y]"),
             (rows(("todo[x].items[x]", "retriever.a[x]")), "each parameter used once"),
-            (rows(("todo[*]", "retriever.a[*]")), "the name must look like"),
+            (rows(("todo[*]", "retriever.a[*]")), "'todo[*]' is not a name"),
             (rows(("todo[x]", "retriever.a[x] +")), "'todo[x]'"),
             (rows(("due", "retriever.reminders.data.count +")), "'due'"),
             (rows(("due", "NOSUCHFUNCTION(1)")), "NOSUCHFUNCTION"),
-            (rows(("todo", "1"), ("todo[x]", "retriever.a[x]")), "both as a list and as a single value"),
+            (rows(("todo", "1"), ("todo[x]", "retriever.a[x]")), "todo is defined both as a single value and as a list"),
         ],
     )
     def test_bad_rows(self, bad, words):
@@ -759,13 +817,13 @@ class TestValueErrors:
 
     def test_bad_rows_are_reported_when_settings_are_saved(self, manifest):
         plugin = RetrieverPlugin(manifest)
-        config = {"server_url": "http://192.0.2.10:42511", "key": KEY_B64, "values": rows(("2do", "1"))}
-        assert any("the name must look like" in error for error in plugin.validate_config(config))
+        config = {"server_url": "http://192.0.2.10:42511", "api_key": KEY_B64, "values": rows(("2do", "1"))}
+        assert any("'2do' is not a name" in error for error in plugin.validate_config(config))
 
 
 class TestValuesInAFetch:
     def configure(self, plugin, server, *pairs, default=""):
-        plugin.config = {"server_url": server.url, "key": KEY_B64, "values": rows(*pairs, default=default)}
+        plugin.config = {"server_url": server.url, "api_key": KEY_B64, "values": rows(*pairs, default=default)}
 
     def test_defined_values_sit_beside_the_servers(self, plugin, server):
         self.configure(
@@ -855,11 +913,11 @@ class TestPreview:
         assert plugin._server_config is before
         assert server.paths[calls:] == [SERVER, RETRIEVE]
 
-    @pytest.mark.parametrize("config", [{}, {"server_url": "http://192.0.2.10:42511"}, {"key": KEY_B64}])
+    @pytest.mark.parametrize("config", [{}, {"server_url": "http://192.0.2.10:42511"}, {"api_key": KEY_B64}])
     def test_preview_asks_for_the_settings_it_needs(self, manifest, config):
         plugin = RetrieverPlugin(manifest)
         plugin._config = config
-        with pytest.raises(retriever.PreviewUnavailable, match="Enter the server URL and key first"):
+        with pytest.raises(retriever.PreviewUnavailable, match="Enter the server URL and API key first"):
             plugin.get_preview_text()
 
     def test_preview_says_why_the_server_gave_nothing(self, plugin, server):
@@ -966,14 +1024,14 @@ class TestConfig:
         [
             {},
             {"server_url": "http://192.0.2.10:42511"},
-            {"key": KEY_B64},
-            {"server_url": "  ", "key": KEY_B64},
-            {"server_url": "192.0.2.10:42511", "key": KEY_B64},
-            {"server_url": "file:///etc/passwd", "key": KEY_B64},
-            {"server_url": 42511, "key": KEY_B64},
-            {"server_url": "http://192.0.2.10:42511", "key": "not base64!"},
-            {"server_url": "http://192.0.2.10:42511", "key": base64.b64encode(bytes(16)).decode()},
-            {"server_url": "http://192.0.2.10:42511", "key": 42},
+            {"api_key": KEY_B64},
+            {"server_url": "  ", "api_key": KEY_B64},
+            {"server_url": "192.0.2.10:42511", "api_key": KEY_B64},
+            {"server_url": "file:///etc/passwd", "api_key": KEY_B64},
+            {"server_url": 42511, "api_key": KEY_B64},
+            {"server_url": "http://192.0.2.10:42511", "api_key": "not base64!"},
+            {"server_url": "http://192.0.2.10:42511", "api_key": base64.b64encode(bytes(16)).decode()},
+            {"server_url": "http://192.0.2.10:42511", "api_key": 42},
         ],
     )
     def test_invalid_config(self, manifest, config):
@@ -985,9 +1043,22 @@ class TestConfig:
         assert result.error
         assert KEY_B64 not in result.error
 
+    def test_a_key_stored_under_its_old_name_still_works(self, manifest, server):
+        plugin = RetrieverPlugin(manifest)
+        old = {"server_url": server.url, "key": KEY_B64}
+        assert plugin.validate_config(old) == []
+        plugin.config = old
+        assert plugin.fetch_data().data["error"] == ""
+        assert json.loads(plugin.get_preview_text())["retriever"]["error"] == ""
+
+    def test_the_new_name_wins_over_the_old(self, manifest, server):
+        plugin = RetrieverPlugin(manifest)
+        plugin.config = {"server_url": server.url, "api_key": KEY_B64, "key": base64.b64encode(bytes(32)).decode()}
+        assert plugin.fetch_data().data["error"] == ""
+
     def test_valid_config(self, manifest):
         plugin = RetrieverPlugin(manifest)
-        assert plugin.validate_config({"server_url": "http://192.0.2.10:42511", "key": f" {KEY_B64}\n"}) == []
+        assert plugin.validate_config({"server_url": "http://192.0.2.10:42511", "api_key": f" {KEY_B64}\n"}) == []
 
 
 class TestManifest:
@@ -1000,9 +1071,17 @@ class TestManifest:
 
     def test_settings(self, manifest):
         schema = manifest["settings_schema"]
-        assert schema["required"] == ["server_url", "key"]
-        assert schema["properties"]["key"]["ui:widget"] == "password"
+        assert schema["required"] == ["server_url", "api_key"]
+        assert schema["properties"]["api_key"]["ui:widget"] == "password"
         assert "token" not in schema["properties"]
+
+    def test_the_key_setting_has_a_name_fiestaboard_hides(self, manifest):
+        """FiestaBoard masks a setting in its API and forms by name alone; the password widget does not."""
+        from src.config_manager import SENSITIVE_FIELDS
+
+        assert retriever.KEY_SETTING in SENSITIVE_FIELDS
+        assert retriever.KEY_SETTING in manifest["settings_schema"]["properties"]
+        assert retriever.OLD_KEY_SETTING not in manifest["settings_schema"]["properties"]
 
     @pytest.mark.parametrize(("device_type", "rows"), [("flagship", 6), ("note", 3)])
     def test_demo_page_per_board(self, manifest, device_type, rows):
