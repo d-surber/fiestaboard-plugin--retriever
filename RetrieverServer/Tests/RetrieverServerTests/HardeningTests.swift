@@ -274,19 +274,19 @@ private func inspectingBytes(as identifier: String) -> (String) throws -> Signer
 
 // MARK: Source names
 
-@Test func aConfigListingAModuleTwiceOrUnderAReservedNameIsRefused() throws {
+@Test func aConfigListingTwoSourcesOfOneNameOrOneUnderATakenNameIsRefused() throws {
     let key = P256.Signing.PrivateKey()
     func verdict(_ identifiers: [String]) throws -> ModuleConfigVerdict {
         let modules = identifiers.map { ModuleConfig.Module(identifier: $0) }
         let bytes = ModuleConfig(version: 1, expires: now.addingTimeInterval(86400), modules: modules).encoded()
         return ModuleConfigStore.verify(config: bytes, signature: try key.signature(for: bytes).derRepresentation,
-                                  publicKeyPEM: key.publicKey.pemRepresentation, now: now)
+                                        publicKeyPEM: key.publicKey.pemRepresentation, now: now)
     }
     #expect(try verdict(["local.retriever-source.os", "local.retriever-source.music", "local.retriever-source.os"])
-            == .invalid("module config lists local.retriever-source.os twice"))
+            == .invalid("module config lists two sources named \"os\""))
     for reserved in Wire.reservedSourceNames {
         guard case .invalid(let reason) = try verdict(["local.retriever-source.\(reserved)"]) else { Issue.record("\(reserved) was accepted"); continue }
-        #expect(reason.contains("a name the plugin keeps for itself"))
+        #expect(reason.contains("a name that is already taken"))
     }
     #expect(Wire.reservedSourceNames == ["error", "server"])
 }

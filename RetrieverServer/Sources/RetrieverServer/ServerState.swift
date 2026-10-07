@@ -88,10 +88,10 @@ final class ServerState {
         return changed
     }
 
-    /// Records which of `asked` were reached, going by the name each source gives itself.
+    /// Records which of `asked` were reached, going by the name each source is served under.
     private func noteReached(_ found: [Source], of asked: [ModuleConfig.Module]) {
         for module in asked where !reached.contains(where: { $0.module == module }) {
-            if let source = found.first(where: { Signer.moduleIdentifier(for: $0.name) == module.identifier }) {
+            if let source = found.first(where: { $0.name == module.sourceName }) {
                 reached.append((module, source))
             }
         }

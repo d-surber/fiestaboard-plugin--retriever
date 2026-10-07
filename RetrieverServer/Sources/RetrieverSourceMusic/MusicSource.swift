@@ -51,7 +51,7 @@ final class MusicSource: Source {
     }
     """
 
-    func fetch(_ done: @escaping (Entry) -> Void) {
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) {
         DispatchQueue.global().async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")

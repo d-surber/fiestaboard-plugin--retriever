@@ -44,11 +44,16 @@ enum ModuleConfigCommand {
 
     // MARK: sign
 
-    /// `--days N`, `--pin` and `--replace-key`, and whatever else was given.
+    /// `--days N`, `--pin`, `--replace-key`, `--name NAME` and any number
+    /// of `--set PARAMETER=VALUE`, and whatever else was given.
     struct Options: Equatable {
         var days = Int(ModuleConfig.defaultValidity / 86400)
         var pin = false
         var replaceKey = false
+        /// The name to serve a source under, from `--name`.
+        var sourceName: String?
+        /// What the module is to be asked, from each `--set`.
+        var parameters: SourceParameters = [:]
         var names: [String] = []
 
         init(_ arguments: [String]) throws {
@@ -62,6 +67,14 @@ enum ModuleConfigCommand {
                     pin = true
                 case "--replace-key":
                     replaceKey = true
+                case "--name":
+                    guard let name = rest.popFirst() else { throw Problem("--name needs the name to serve the source under") }
+                    sourceName = name
+                case "--set":
+                    guard let setting = rest.popFirst(), let equals = setting.firstIndex(of: "="), equals != setting.startIndex else {
+                        throw Problem("--set needs a parameter and its value, as in: --set days_from_today=1")
+                    }
+                    parameters[String(setting[..<equals])] = ModuleConfigCommand.parameterValue(String(setting[setting.index(after: equals)...]))
                 default:
                     names.append(argument)
                 }
@@ -69,13 +82,34 @@ enum ModuleConfigCommand {
         }
     }
 
+    /// A parameter's value as typed on a command line: a whole number, a
+    /// number, `true` or `false` if it reads as one, and otherwise text.
+    /// Quotes around it make it text whatever it reads as.
+    static func parameterValue(_ written: String) -> JSON {
+        if written.count >= 2, written.hasPrefix("\""), written.hasSuffix("\"") { return .string(String(written.dropFirst().dropLast())) }
+        if written == "true" { return .bool(true) }
+        if written == "false" { return .bool(false) }
+        if let whole = Int(written) { return .int(whole) }
+        if let number = Double(written), number.isFinite { return .double(number) }
+        return .string(written)
+    }
+
     static var installedConfig: ModuleConfig? {
         (try? Data(contentsOf: ModuleConfigStore.installedFolder.appendingPathComponent(ModuleConfigStore.configFile))).flatMap(ModuleConfig.decode)
     }
 
-    /// The list after allowing `added`: each replaces any entry for the same module.
+    /// The list a change starts from: the one signed and waiting to be
+    /// installed, if there is one, and otherwise the installed one. So
+    /// several changes can be made one after another and installed together.
+    static var listToChange: [ModuleConfig.Module] {
+        let pendingFolder = ModuleConfigStore.pendingFolder(home: FileManager.default.homeDirectoryForCurrentUser)
+        let waiting = (try? Data(contentsOf: pendingFolder.appendingPathComponent(ModuleConfigStore.configFile))).flatMap(ModuleConfig.decode)
+        return (waiting ?? installedConfig)?.modules ?? []
+    }
+
+    /// The list after allowing `added`: each replaces any entry for a source of the same name.
     static func allowing(_ added: [ModuleConfig.Module], in modules: [ModuleConfig.Module]) -> [ModuleConfig.Module] {
-        modules.filter { existing in !added.contains { $0.identifier == existing.identifier } } + added
+        modules.filter { existing in !added.contains { $0.sourceName == existing.sourceName } } + added
     }
 
     /// config sign: sign the current list again, or, with no config yet,
@@ -84,7 +118,7 @@ enum ModuleConfigCommand {
         let options = try Options(arguments)
         var modules = options.names.map { ModuleConfig.Module(identifier: $0) }
         if let problem = ModuleConfigStore.problem(withModules: modules) { throw Problem("Not signed: \(problem).") }
-        if modules.isEmpty { modules = installedConfig?.modules ?? [] }
+        if modules.isEmpty { modules = listToChange }
         if modules.isEmpty {
             modules = Installation.modules(in: Installation.programs).accepted.map { ModuleConfig.Module(identifier: $0.identifier) }
         }
@@ -92,10 +126,15 @@ enum ModuleConfigCommand {
         try signAndStage(modules, days: options.days)
     }
 
-    /// config add: allow a module, named by its program's path or its identifier.
+    /// config add: allow a source, naming its module by its program's path
+    /// or its identifier; with `--name` and `--set`, under a name of its own
+    /// and with something to ask the module.
     static func add(_ arguments: [String]) throws {
         let options = try Options(arguments)
         guard !options.names.isEmpty else { throw Problem("Name the module to allow: its program, or its identifier.") }
+        guard options.names.count == 1 || (options.sourceName == nil && options.parameters.isEmpty) else {
+            throw Problem("--name and --set say how one module is to be listed; name one module at a time with them.")
+        }
         let installed = Installation.modules(in: Installation.programs).accepted
         var added: [ModuleConfig.Module] = []
         for name in options.names {
@@ -110,16 +149,35 @@ enum ModuleConfigCommand {
             guard module.identifier.hasPrefix(Installation.moduleIdentifierPrefix) else {
                 throw Problem("Not added: \(module.path) is signed as \"\(module.identifier)\", which is not a module.")
             }
-            added.append(ModuleConfig.Module(identifier: module.identifier, cdhash: options.pin ? module.cdhash : nil))
+            let entry = ModuleConfig.Module(identifier: module.identifier, cdhash: options.pin ? module.cdhash : nil,
+                                            name: options.sourceName, parameters: options.parameters.isEmpty ? nil : options.parameters)
+            if let problem = ModuleConfigStore.problem(with: entry) { throw Problem("Not added: \(problem).") }
+            try askModuleAboutParameters(of: entry)
+            added.append(entry)
         }
-        try signAndStage(allowing(added, in: installedConfig?.modules ?? []), days: options.days)
+        try signAndStage(allowing(added, in: listToChange), days: options.days)
     }
 
-    /// config remove: stop allowing a module.
+    /// Puts an entry's parameters to its module before the entry is signed,
+    /// so that a mistake is caught while the person who made it is there.
+    /// The server asks again when it starts; that is the check that counts,
+    /// and a module that cannot be asked now is left to it.
+    /// - Throws: `Problem` if the module answers that it will not take them.
+    static func askModuleAboutParameters(of entry: ModuleConfig.Module) throws {
+        guard let parameters = entry.parameters else { return }
+        guard let source = try? RemoteSource(serviceName: entry.identifier, cdhash: entry.cdhash, name: entry.name, parameters: parameters) else {
+            print("\(entry.identifier) is not running here to be asked about its parameters; the server will ask it when it starts.")
+            return
+        }
+        if let problem = source.parameterProblem { throw Problem("Not added: the source \"\(entry.sourceName)\" \(problem).") }
+    }
+
+    /// config remove: stop allowing a source, named by its own name, or
+    /// every source of a module, named by the module's identifier.
     static func remove(_ arguments: [String]) throws {
         let options = try Options(arguments)
-        let current = installedConfig?.modules ?? []
-        let remaining = current.filter { !options.names.contains($0.identifier) }
+        let current = listToChange
+        let remaining = current.filter { !options.names.contains($0.sourceName) && !options.names.contains($0.identifier) }
         guard remaining.count < current.count else { throw Problem("Nothing removed: the config allows none of those.") }
         try signAndStage(remaining, days: options.days)
     }
@@ -264,12 +322,24 @@ enum ModuleConfigCommand {
         print("It expires in \(config.daysRemaining(now: Date())) days. The server picks it up within a minute.")
     }
 
-    /// Lists modules, one to a line, each with the build it is pinned to if it is.
+    /// Lists the sources a config allows, one to a line: its name, its
+    /// module, the build it is pinned to if it is, and what the module is asked.
     static func printModules(_ modules: [ModuleConfig.Module]) {
         if modules.isEmpty { print("  no modules") }
         for module in modules {
-            print("  \(module.identifier)" + (module.cdhash.map { ", only the build \($0)" } ?? ""))
+            print("  \(module.sourceName): \(module.identifier)" + (module.cdhash.map { ", only the build \($0)" } ?? "") + asked(of: module))
         }
+    }
+
+    /// What an entry asks of its module, for a person to read; "" if nothing.
+    static func asked(of module: ModuleConfig.Module) -> String {
+        guard let parameters = module.parameters, !parameters.isEmpty else { return "" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        let settings = parameters.sorted { $0.key < $1.key }.map { name, value in
+            "\(name)=" + ((try? encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "?")
+        }
+        return ", asked " + settings.joined(separator: " ")
     }
 
     // MARK: status
@@ -281,7 +351,10 @@ enum ModuleConfigCommand {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let installed = Installation.modules(in: Installation.programs)
         print("Programs: \(Installation.programs.path)" + (installed.accepted.isEmpty ? " (no modules installed)" : ""))
-        for module in installed.accepted { print("  installed module \(module.identifier), build \(module.cdhash.prefix(12))…") }
+        for module in installed.accepted {
+            print("  installed module \(module.identifier), build \(module.cdhash.prefix(12))…")
+            for line in parametersTaken(by: module.identifier) { print("      \(line)") }
+        }
         for name in installed.refused { print("  \(name): not signed by this server's signer") }
 
         let hasTransportKey = Installation.transportKey(home: home).flatMap(Wire.transportKey(base64:)) != nil
@@ -301,20 +374,31 @@ enum ModuleConfigCommand {
         exit(0)
     }
 
+    /// What to tell a person about the parameters an installed module
+    /// takes: a line for each, or one saying it could not be asked. Nothing
+    /// for a module that takes none.
+    static func parametersTaken(by identifier: String) -> [String] {
+        guard let source = try? RemoteSource(serviceName: identifier) else { return ["could not be asked what parameters it takes"] }
+        return ParametersSchema.summary(of: source.parametersSchema).map { "takes \($0)" }
+    }
+
     /// One line saying whether a module can be reached and, if so, what its source reports now.
     static func reachability(of module: ModuleConfig.Module) -> String {
         let pin = module.cdhash.map { ", pinned to build \($0.prefix(12))…" } ?? ""
+        let listed = "\(module.sourceName) (\(module.identifier)\(pin)\(asked(of: module)))"
         let source: RemoteSource
-        do { source = try RemoteSource(serviceName: module.identifier, cdhash: module.cdhash) } catch {
-            return "\(module.identifier)\(pin): \(error)"
+        do {
+            source = try RemoteSource(serviceName: module.identifier, cdhash: module.cdhash, name: module.name, parameters: module.parameters ?? [:])
+        } catch {
+            return "\(listed): \(error)"
         }
         var line = ""
         let answered = DispatchSemaphore(value: 0)
-        source.fetch { entry in
+        source.fetch(parameters: [:]) { entry in
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
             let data = (try? encoder.encode(entry.data)).map { String(decoding: $0, as: UTF8.self) } ?? "?"
-            line = "\(module.identifier)\(pin): ok; source \"\(source.name)\"; error \"\(entry.error)\"; data \(data)"
+            line = "\(listed): ok; error \"\(entry.error)\"; data \(data)"
             answered.signal()
         }
         answered.wait()   // a module answers or is given up on within RemoteSource.answerTimeout

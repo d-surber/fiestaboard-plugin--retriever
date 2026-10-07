@@ -16,13 +16,36 @@ import RetrieverSourceKit
 // the module was built by the server's signer (see Signer). The config key
 // says this installation is meant to run it.
 struct ModuleConfig: Codable, Equatable {
-    /// One module the config allows.
+    /// One source the config allows, and the module that provides it.
+    ///
+    /// Listing a module is enough to have its source served under the
+    /// module's own name. An entry may also give the source another name and
+    /// say what the module is to be asked, and then the same module can be
+    /// listed again, under a different name, to be asked something else.
     struct Module: Codable, Equatable {
         /// The module's signing identifier, which is also its XPC service name.
         let identifier: String
         /// Optionally, the hash of the one build that is allowed.
         var cdhash: String?
+        /// The name to serve the source under; nil for the module's own.
+        var name: String?
+        /// What the module is asked on every fetch; nil for nothing.
+        var parameters: SourceParameters?
+
+        /// The name the source is served under.
+        var sourceName: String { name ?? String(identifier.dropFirst(Signer.moduleIdentifierPrefix.count)) }
+
+        /// Whether `text` can be a name an entry gives its source: lower-case
+        /// letters, digits and underscores, beginning with a letter. Not a
+        /// hyphen, which a formula on a page would read as a minus.
+        static func isSourceName(_ text: String) -> Bool {
+            guard let first = text.first, first.isASCII, first.isLowercase else { return false }
+            return text.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "_") }
+        }
     }
+
+    /// Names no entry's source may have: the plugin's own, and the server's.
+    static let reservedSourceNames = Wire.reservedSourceNames + ["module_config"]
 
     /// Counts signings. Informational: expiry, not this, is what retires an old config.
     var version: Int
@@ -121,14 +144,15 @@ enum ModuleConfigStore {
         return .valid(decoded)
     }
 
-    /// What is wrong with the modules a config lists, or nil: the first
-    /// module with a problem of its own, or one listed twice. Two entries
-    /// for one module would be two sources of one name.
+    /// What is wrong with the entries a config lists, or nil: the first
+    /// entry with a problem of its own, or the first whose source has the
+    /// name of an earlier one. A module may be listed more than once, but
+    /// each time under a different name.
     static func problem(withModules modules: [ModuleConfig.Module]) -> String? {
         if let problem = modules.lazy.compactMap(problem(with:)).first { return problem }
-        var listed = Set<String>()
-        for module in modules where !listed.insert(module.identifier).inserted {
-            return "module config lists \(module.identifier) twice"
+        var named = Set<String>()
+        for module in modules where !named.insert(module.sourceName).inserted {
+            return "module config lists two sources named \"\(module.sourceName)\""
         }
         return nil
     }
@@ -141,9 +165,11 @@ enum ModuleConfigStore {
         guard Signer.isModuleIdentifier(module.identifier) else {
             return "module config lists \"\(module.identifier)\", which is not a module's identifier"
         }
-        let sourceName = String(module.identifier.dropFirst(Signer.moduleIdentifierPrefix.count))
-        guard !Wire.reservedSourceNames.contains(sourceName) else {
-            return "module config lists \(module.identifier), whose source would be named \"\(sourceName)\", a name the plugin keeps for itself"
+        if let name = module.name, !ModuleConfig.Module.isSourceName(name) {
+            return "module config names a source \"\(name)\", which is not a name a source can have"
+        }
+        guard !ModuleConfig.reservedSourceNames.contains(module.sourceName) else {
+            return "module config lists \(module.identifier) as the source \"\(module.sourceName)\", a name that is already taken"
         }
         if let cdhash = module.cdhash, !Signer.isCodeHash(cdhash) {
             return "module config pins \(module.identifier) to \"\(cdhash)\", which is not a code hash"
@@ -261,7 +287,7 @@ final class ModuleConfigSource: Source {
     var verdict: ModuleConfigVerdict = .invalid("not loaded")
     var now: () -> Date = Date.init
 
-    func fetch(_ done: @escaping (Entry) -> Void) {
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) {
         done(entry(now: now()))
     }
 

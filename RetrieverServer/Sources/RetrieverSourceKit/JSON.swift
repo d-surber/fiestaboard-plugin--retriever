@@ -35,9 +35,11 @@ public indirect enum JSON: Codable, Equatable {
     }
 }
 
-extension JSON: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, ExpressibleByArrayLiteral, ExpressibleByDictionaryLiteral {
+extension JSON: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, ExpressibleByBooleanLiteral, ExpressibleByArrayLiteral,
+                ExpressibleByDictionaryLiteral {
     public init(stringLiteral value: String) { self = .string(value) }
     public init(integerLiteral value: Int) { self = .int(value) }
+    public init(booleanLiteral value: Bool) { self = .bool(value) }
     public init(arrayLiteral elements: JSON...) { self = .array(elements) }
     public init(dictionaryLiteral elements: (String, JSON)...) { self = .object(Dictionary(uniqueKeysWithValues: elements)) }
 }

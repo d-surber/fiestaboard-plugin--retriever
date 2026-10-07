@@ -20,11 +20,32 @@ public protocol Source {
     /// show when nothing is known.
     var schema: JSON { get }
 
+    /// The JSON Schema of the parameters this source takes: an object, each
+    /// property a parameter, with its type and, for a person reading it, its
+    /// default. A source that takes none need not say so.
+    var parametersSchema: JSON { get }
+
+    /// What is wrong with a set of parameters, or nil if this source can be
+    /// asked with them. Unless a source has more to say, they are checked
+    /// against `parametersSchema`.
+    ///
+    /// Asked once for each entry in the module config, when the server
+    /// starts, so that a mistake in the config is reported then and not
+    /// found one fetch at a time. It must not depend on anything that can
+    /// change while the server runs.
+    func problem(with parameters: SourceParameters) -> String?
+
     /// Reads the source's current data. Calls `done` exactly once, on any
     /// queue. A source never throws and never takes the server down: a
     /// problem is reported in the entry's `error`.
-    func fetch(_ done: @escaping (Entry) -> Void)
+    /// - Parameter parameters: what this entry in the module config asks of
+    ///   the source; the same module may be asked different things under
+    ///   different names. They have passed `problem(with:)`.
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void)
 }
+
+/// What a source is asked, by parameter name.
+public typealias SourceParameters = [String: JSON]
 
 /// What a source reports. `error` is a problem getting this source's data in
 /// particular, and is empty when there was none.
@@ -39,6 +60,13 @@ public struct Entry: Codable, Equatable {
 }
 
 public extension Source {
+    /// A source takes no parameters unless it says otherwise.
+    var parametersSchema: JSON { ["type": "object", "properties": [:]] }
+
+    func problem(with parameters: SourceParameters) -> String? {
+        ParametersSchema.problem(with: parameters, against: parametersSchema)
+    }
+
     /// The data to show when nothing is known: the schema's `default`.
     var defaultData: JSON {
         if case .object(let schema) = schema, let value = schema["default"] { return value }

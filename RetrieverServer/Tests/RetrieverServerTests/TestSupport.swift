@@ -27,7 +27,7 @@ struct FixedSource: Source {
     let name: String
     let schema: JSON
     var value: JSON = .null
-    func fetch(_ done: @escaping (Entry) -> Void) { done(Entry(error: "", data: value)) }
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) { done(Entry(error: "", data: value)) }
 }
 
 /// The sources the interop vectors in tests/vectors.json were generated

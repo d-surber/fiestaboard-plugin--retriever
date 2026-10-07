@@ -44,12 +44,29 @@ enum Help {
               unless you add --replace-key to change the key on purpose.
 
         CHANGING WHAT IS ALLOWED  (as yourself, then: sudo RetrieverServer config install)
-          RetrieverServer config add <module program or identifier> [--pin]
-              Allows a module. --pin allows only that exact build, so a rebuilt
-              module must be added again.
+          Each change is signed as it is made and waits to be installed. Several
+          can be made one after another and installed together.
 
-          RetrieverServer config remove <identifier>
-              Stops allowing a module.
+          RetrieverServer config add <module program or identifier> [--pin]
+              Allows a module's source, under the module's own name. --pin
+              allows only that exact build, so a rebuilt module must be added
+              again.
+
+          RetrieverServer config add <module> --name <name> [--set <parameter>=<value> ...]
+              Allows a source under a name of your choosing, and says what its
+              module is to be asked. A module that takes parameters can be
+              listed as often as you like, each time under another name:
+                config add local.retriever-source.calendar --name today
+                config add local.retriever-source.calendar --name tomorrow --set days_from_today=1
+              A name is lower-case letters, digits and underscores. A value
+              that reads as a number or as true or false is one; put it in
+              quotes to make it text. The module is asked whether it takes
+              these before they are signed, and again when the server starts:
+              a source with parameters its module will not take is served
+              with that as its error.
+
+          RetrieverServer config remove <source name or module identifier>
+              Stops allowing a source, or every source of a module.
 
           RetrieverServer config sign [identifier ...]
               Signs the current list again, which renews its expiry. Naming
@@ -62,9 +79,10 @@ enum Help {
 
         LOOKING
           RetrieverServer status
-              The installed modules, the transport key, which config key is
-              trusted, whether the config is valid and when it expires, and
-              whether each module it allows can be reached.
+              The installed modules and the parameters each takes, the
+              transport key, which config key is trusted, whether the config
+              is valid and when it expires, and whether each source it allows
+              can be reached.
 
           RetrieverServer log [none | terse | verbose | debug]
               How much is written to the log. With no level, shows the one in

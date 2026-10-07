@@ -11,7 +11,7 @@ private struct FakeSource: Source {
     var answers = 1
     let schema: JSON = ["type": "object", "default": ["n": 0]]
 
-    func fetch(_ done: @escaping (Entry) -> Void) {
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) {
         for _ in 0..<answers {
             DispatchQueue.global().asyncAfter(deadline: .now() + delay) { done(succeeded(value)) }
         }

@@ -21,7 +21,7 @@ func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQ
     }
     queue.async {
         for source in sources {
-            source.fetch { entry in
+            source.fetch(parameters: [:]) { entry in
                 queue.async {
                     guard !finished, entries[source.name] == nil else { return }
                     entries[source.name] = entry

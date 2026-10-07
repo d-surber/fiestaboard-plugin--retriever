@@ -48,7 +48,7 @@ final class RemindersSource: Source {
 
     private let store = EKEventStore()
 
-    func fetch(_ done: @escaping (Entry) -> Void) {
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) {
         // Asks the user the first time; answers at once after that.
         store.requestFullAccessToReminders { granted, error in
             guard granted else {

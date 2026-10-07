@@ -21,7 +21,7 @@ final class OSSource: Source {
         "default": ["version": "", "build": ""],
     ]
 
-    func fetch(_ done: @escaping (Entry) -> Void) {
+    func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         done(succeeded(Payload(version: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)", build: Self.build())))
     }

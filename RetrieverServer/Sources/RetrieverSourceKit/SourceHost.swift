@@ -1,22 +1,27 @@
 import Foundation
 
-/// What the server asks a source module, over XPC. Both answers are JSON, so
-/// the interface is the same for every source.
+/// What the server asks a source module, over XPC. Questions and answers are
+/// JSON, so the interface is the same for every source.
 @objc public protocol SourceService {
     /// A `SourceDescription`.
     func describe(reply: @escaping (Data) -> Void)
-    /// An `Entry`.
-    func fetch(reply: @escaping (Data) -> Void)
+    /// What is wrong with these `SourceParameters`, in words; "" if the source can be asked with them.
+    func problem(withParameters parameters: Data, reply: @escaping (String) -> Void)
+    /// An `Entry`, asked for with these `SourceParameters`.
+    func fetch(parameters: Data, reply: @escaping (Data) -> Void)
 }
 
-/// What a module says it is: the name of its source and the shape of its data.
+/// What a module says it is: the name of its source, the shape of its data,
+/// and the parameters it takes.
 public struct SourceDescription: Codable, Equatable {
     public let name: String
     public let schema: JSON
+    public let parametersSchema: JSON
 
-    public init(name: String, schema: JSON) {
+    public init(name: String, schema: JSON, parametersSchema: JSON) {
         self.name = name
         self.schema = schema
+        self.parametersSchema = parametersSchema
     }
 }
 
@@ -57,11 +62,22 @@ public enum SourceHost {
         init(_ source: Source) { self.source = source }
 
         func describe(reply: @escaping (Data) -> Void) {
-            reply((try? JSONEncoder().encode(SourceDescription(name: source.name, schema: source.schema))) ?? Data())
+            let description = SourceDescription(name: source.name, schema: source.schema, parametersSchema: source.parametersSchema)
+            reply((try? JSONEncoder().encode(description)) ?? Data())
         }
 
-        func fetch(reply: @escaping (Data) -> Void) {
-            source.fetch { entry in reply((try? JSONEncoder().encode(entry)) ?? Data()) }
+        func problem(withParameters parameters: Data, reply: @escaping (String) -> Void) {
+            guard let parameters = try? JSONDecoder().decode(SourceParameters.self, from: parameters) else {
+                return reply("its parameters could not be read")
+            }
+            reply(source.problem(with: parameters) ?? "")
+        }
+
+        func fetch(parameters: Data, reply: @escaping (Data) -> Void) {
+            guard let parameters = try? JSONDecoder().decode(SourceParameters.self, from: parameters) else {
+                return reply((try? JSONEncoder().encode(source.failed("its parameters could not be read"))) ?? Data())
+            }
+            source.fetch(parameters: parameters) { entry in reply((try? JSONEncoder().encode(entry)) ?? Data()) }
         }
     }
 
