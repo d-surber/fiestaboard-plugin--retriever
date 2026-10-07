@@ -45,9 +45,10 @@ let package = Package(
         module("RetrieverSourceOS"),
         module("RetrieverSourceReminders", infoPlist: true),
         module("RetrieverSourceMusic", infoPlist: true),
+        module("RetrieverSourceCalendar", infoPlist: true),
         .testTarget(
             name: "RetrieverServerTests",
             dependencies: ["RetrieverServer", "RetrieverSourceKit", "RetrieverSourceOS",
-                           "RetrieverSourceReminders", "RetrieverSourceMusic"]),
+                           "RetrieverSourceReminders", "RetrieverSourceMusic", "RetrieverSourceCalendar"]),
     ]
 )
