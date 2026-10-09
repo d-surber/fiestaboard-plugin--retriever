@@ -52,3 +52,11 @@ private func retrieved(_ sources: [Source], timeout: TimeInterval = 2) async -> 
     #expect(source.failed("broken") == Entry(error: "broken", data: ["n": 0]))
     #expect(source.succeeded(["n": 5]) == Entry(error: "", data: ["n": 5]))
 }
+
+@Test func aDateIsWrittenAsTheTimeOfDayHereWithItsOffset() throws {
+    let nineInTheMorningInLosAngeles = Date(timeIntervalSince1970: 1_791_475_200)   // 2026-10-08T16:00:00Z
+    let losAngeles = try #require(TimeZone(identifier: "America/Los_Angeles"))
+    let utc = try #require(TimeZone(identifier: "UTC"))
+    #expect(JSON(encoding: ["at": nineInTheMorningInLosAngeles], in: losAngeles) == ["at": "2026-10-08T09:00:00-07:00"])
+    #expect(JSON(encoding: ["at": nineInTheMorningInLosAngeles], in: utc) == ["at": "2026-10-08T16:00:00Z"])
+}

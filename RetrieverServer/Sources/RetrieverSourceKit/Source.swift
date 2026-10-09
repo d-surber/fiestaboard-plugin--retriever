@@ -86,10 +86,18 @@ public extension Source {
 }
 
 public extension JSON {
-    /// The JSON form of an Encodable value, with dates in ISO 8601.
-    init?<Value: Encodable>(encoding value: Value) {
+    /// The JSON form of an Encodable value. A date is written in ISO 8601 as
+    /// the time of day in `timeZone` with its offset from UTC:
+    /// "2026-10-08T09:00:00-07:00". It is the same moment however it is
+    /// written; written this way it also says what the clock here showed.
+    init?<Value: Encodable>(encoding value: Value, in timeZone: TimeZone = .current) {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = timeZone
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(formatter.string(from: date))
+        }
         guard let data = try? encoder.encode(value), let json = try? JSONDecoder().decode(JSON.self, from: data) else { return nil }
         self = json
     }
