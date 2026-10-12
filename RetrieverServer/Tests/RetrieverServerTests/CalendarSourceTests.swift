@@ -28,30 +28,83 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> 
 
 @Test func itSaysWhatItsParametersAreFor() {
     #expect(ParametersSchema.summary(of: CalendarSource().parametersSchema) == [
-        "calendar: text, \"\" if left out. The calendar's name as the Calendar app shows it; empty for every calendar.",
+        "calendars: text, \"\" if left out. Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
         "days_from_today: a whole number, at least -3660, at most 3660, 0 if left out. 0 is today, 1 tomorrow, -1 yesterday.",
+        "except: text, \"\" if left out. Every calendar but these, named the same way. Not together with calendars.",
     ])
 }
 
 @Test func withNoParametersItIsEveryCalendarToday() {
     let asked = CalendarSource.asked(by: [:])
-    #expect(asked.calendarName == "")
+    #expect(asked.wanted == .every)
     #expect(asked.daysFromToday == 0)
 }
 
-@Test func itIsAskedForACalendarByNameAndADayByItsDistanceFromToday() {
-    let asked = CalendarSource.asked(by: ["calendar": "Work", "days_from_today": -1])
-    #expect(asked.calendarName == "Work")
+@Test func itIsAskedForCalendarsByNameAndADayByItsDistanceFromToday() {
+    let asked = CalendarSource.asked(by: ["calendars": "Work, Family", "days_from_today": -1])
+    #expect(asked.wanted == .only(["Work", "Family"]))
     #expect(asked.daysFromToday == -1)
 }
 
+@Test func itIsAskedForEveryCalendarButSome() {
+    #expect(CalendarSource.asked(by: ["except": "Birthdays,US Holidays"]).wanted == .allBut(["Birthdays", "US Holidays"]))
+    #expect(CalendarSource.asked(by: ["calendars": "", "except": ""]).wanted == .every)
+}
+
 @Test(arguments: [
-    (["calendar": "Work", "days_from_today": 1] as SourceParameters, nil as String?),
+    ("Work", ["Work"]),
+    ("Work,Family", ["Work", "Family"]),
+    ("  Work ,  US Holidays  ", ["Work", "US Holidays"]),
+    ("Work,,Family,", ["Work", "Family"]),
+    ("Work, work, WORK, Family", ["Work", "Family"]),
+    ("", []),
+    (" , ", []),
+])
+func aListOfNamesIsWrittenWithCommas(list: String, names: [String]) {
+    #expect(CalendarSource.names(in: list) == names)
+}
+
+/// The calendars of a Mac with two accounts, each with a calendar called Home.
+private let calendarsHere = ["Home", "Work", "Birthdays", "Home", "Family"]
+
+private func chosen(_ wanted: CalendarSource.Wanted) -> String {
+    switch CalendarSource.choose(wanted, from: Array(calendarsHere.indices), title: { calendarsHere[$0] }) {
+    case .every: return "every"
+    case .these(let indices): return "these \(indices)"
+    case .missing(let names): return "missing \(names)"
+    }
+}
+
+@Test func onlyTheNamedCalendarsAreChosenInWhicheverAccountTheyAre() {
+    #expect(chosen(.every) == "every")
+    #expect(chosen(.only(["Work"])) == "these [1]")
+    #expect(chosen(.only(["home", "FAMILY"])) == "these [0, 3, 4]")
+}
+
+@Test func everyCalendarButTheNamedOnesIsChosen() {
+    #expect(chosen(.allBut(["Birthdays"])) == "these [0, 1, 3, 4]")
+    #expect(chosen(.allBut(["home"])) == "these [1, 2, 4]")
+    #expect(chosen(.allBut(["Home", "Work", "Birthdays", "Family"])) == "these []")
+}
+
+@Test func aNameThatIsNoCalendarsIsAMistakeWhicheverListItIsIn() {
+    #expect(chosen(.only(["Work", "Wrok", "Holidays"])) == "missing [\"Wrok\", \"Holidays\"]")
+    #expect(chosen(.allBut(["Birthdays", "Holidays"])) == "missing [\"Holidays\"]")
+}
+
+@Test(arguments: [
+    (["calendars": "Work, Family", "days_from_today": 1] as SourceParameters, nil as String?),
+    (["except": "Birthdays"], nil),
+    (["calendars": "", "except": "Birthdays"], nil),
+    (["calendars": "Work", "except": "Birthdays"], "give \"calendars\" or \"except\", not both"),
+    (["calendars": " , "], "the parameter \"calendars\" names no calendar"),
+    (["except": ","], "the parameter \"except\" names no calendar"),
     (["days_from_today": "tomorrow"], "the parameter \"days_from_today\" must be a whole number, not \"tomorrow\""),
     (["days_from_today": .double(0.5)], "the parameter \"days_from_today\" must be a whole number, not 0.5"),
     (["days_from_today": 4000], "the parameter \"days_from_today\" must be at most 3660, not 4000"),
-    (["calendar": 7], "the parameter \"calendar\" must be text, not 7"),
-    (["date": "2026-10-08"], "takes no parameter named \"date\" (it takes: calendar, days_from_today)"),
+    (["calendars": 7], "the parameter \"calendars\" must be text, not 7"),
+    (["calendar": "Work"], "takes no parameter named \"calendar\" (it takes: calendars, days_from_today, except)"),
+    (["date": "2026-10-08"], "takes no parameter named \"date\" (it takes: calendars, days_from_today, except)"),
 ])
 func itsParametersAreChecked(parameters: SourceParameters, problem: String?) {
     #expect(CalendarSource().problem(with: parameters) == problem)

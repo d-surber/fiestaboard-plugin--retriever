@@ -4,9 +4,12 @@ import RetrieverSourceKit
 
 /// The events of one day, from the Calendar app.
 ///
-/// Which day, and which calendar, are parameters, so that the module can be
+/// Which day, and which calendars, are parameters, so that the module can be
 /// listed in the module config more than once: as today's events and as
-/// tomorrow's, or as one calendar's and as another's.
+/// tomorrow's, or as some calendars' and as others'.
+///
+/// A calendar is named as the Calendar app shows it, and the name stands for
+/// every calendar so called, whichever account it is in.
 final class CalendarSource: Source {
     /// One event. Times are moments, not text laid out for a display.
     struct Event: Codable, Equatable {
@@ -63,23 +66,85 @@ final class CalendarSource: Source {
     let parametersSchema: JSON = [
         "type": "object",
         "properties": [
-            "calendar": [
+            "calendars": [
                 "type": "string", "default": "",
-                "description": "The calendar's name as the Calendar app shows it; empty for every calendar.",
+                "description": "Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
             ],
             "days_from_today": [
                 "type": "integer", "default": 0, "minimum": .int(-furthestDayFromToday), "maximum": .int(furthestDayFromToday),
                 "description": "0 is today, 1 tomorrow, -1 yesterday.",
             ],
+            "except": [
+                "type": "string", "default": "",
+                "description": "Every calendar but these, named the same way. Not together with calendars.",
+            ],
         ],
     ]
 
+    /// Which calendars are wanted, each by name.
+    enum Wanted: Equatable {
+        case every
+        case only([String])
+        case allBut([String])
+    }
+
+    /// The calendars a choice comes to, or the names it gives that no calendar has.
+    enum Chosen<Item> {
+        case every
+        case these([Item])
+        case missing([String])
+    }
+
     /// What a set of parameters asks for, with the defaults for what it leaves out.
-    static func asked(by parameters: SourceParameters) -> (calendarName: String, daysFromToday: Int) {
-        var calendarName = "", daysFromToday = 0
-        if case .string(let name)? = parameters["calendar"] { calendarName = name }
+    static func asked(by parameters: SourceParameters) -> (wanted: Wanted, daysFromToday: Int) {
+        var only: [String] = [], allBut: [String] = [], daysFromToday = 0
+        if case .string(let list)? = parameters["calendars"] { only = names(in: list) }
+        if case .string(let list)? = parameters["except"] { allBut = names(in: list) }
         if case .int(let days)? = parameters["days_from_today"] { daysFromToday = days }
-        return (calendarName, daysFromToday)
+        // Both lists at once does not pass `problem(with:)`.
+        return (!only.isEmpty ? .only(only) : !allBut.isEmpty ? .allBut(allBut) : .every, daysFromToday)
+    }
+
+    /// The names in a list written with commas between them: without the
+    /// space around each, and each once however it is capitalised.
+    static func names(in list: String) -> [String] {
+        var names: [String] = []
+        for name in list.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) where !name.isEmpty {
+            if !names.contains(where: { same($0, name) }) { names.append(name) }
+        }
+        return names
+    }
+
+    /// Whether two names name the same calendar: capitals do not matter.
+    static func same(_ one: String, _ other: String) -> Bool {
+        one.caseInsensitiveCompare(other) == .orderedSame
+    }
+
+    /// Which of `all` are wanted, going by the title of each. A name that is
+    /// no calendar's is a mistake whether it was to be read or left out, so
+    /// that a calendar renamed or misspelt does not go unnoticed.
+    static func choose<Item>(_ wanted: Wanted, from all: [Item], title: (Item) -> String) -> Chosen<Item> {
+        let named: [String]
+        switch wanted {
+        case .every: return .every
+        case .only(let names), .allBut(let names): named = names
+        }
+        let missing = named.filter { name in !all.contains { same(title($0), name) } }
+        guard missing.isEmpty else { return .missing(missing) }
+        var only = false
+        if case .only = wanted { only = true }
+        return .these(all.filter { item in named.contains { same(title(item), $0) } == only })
+    }
+
+    func problem(with parameters: SourceParameters) -> String? {
+        if let problem = ParametersSchema.problem(with: parameters, against: parametersSchema) { return problem }
+        var listed: [String] = []
+        for parameter in ["calendars", "except"] {
+            guard case .string(let list)? = parameters[parameter], !list.isEmpty else { continue }
+            if Self.names(in: list).isEmpty { return "the parameter \"\(parameter)\" names no calendar" }
+            listed.append(parameter)
+        }
+        return listed.count > 1 ? "give \"calendars\" or \"except\", not both" : nil
     }
 
     /// The day that is `daysFromToday` after the day `now` falls in, from its
@@ -111,18 +176,23 @@ final class CalendarSource: Source {
     }
 
     /// Reads one day's events, access having been granted.
-    private func read(_ asked: (calendarName: String, daysFromToday: Int)) -> Entry {
+    private func read(_ asked: (wanted: Wanted, daysFromToday: Int)) -> Entry {
         let calendar = Calendar.current
         guard let day = Self.day(asked.daysFromToday, from: Date(), in: calendar) else { return failed("that day cannot be reckoned") }
         store.refreshSourcesIfNecessary()
 
+        // Whether a calendar of a name exists can change while the server
+        // runs, so it is found out here and not when the server starts.
         var calendars: [EKCalendar]?   // nil is every calendar
-        if !asked.calendarName.isEmpty {
-            // Whether a calendar of that name exists can change while the
-            // server runs, so it is found out here and not when the server starts.
-            let named = store.calendars(for: .event).filter { $0.title.caseInsensitiveCompare(asked.calendarName) == .orderedSame }
-            guard !named.isEmpty else { return failed("no calendar named \"\(asked.calendarName)\"") }
-            calendars = named
+        switch Self.choose(asked.wanted, from: store.calendars(for: .event), title: \.title) {
+        case .every: break
+        case .these(let chosen): calendars = chosen
+        case .missing(let names):
+            return failed((names.count == 1 ? "no calendar named " : "no calendars named ") + names.map { "\"\($0)\"" }.joined(separator: ", "))
+        }
+        // Asked for the events of no calendars, EventKit gives those of all of them.
+        if let calendars, calendars.isEmpty {
+            return succeeded(Payload(date: Self.dateText(of: day.start, in: calendar), events: []))
         }
 
         let onThatDay = store.predicateForEvents(withStart: day.start, end: day.end, calendars: calendars)
