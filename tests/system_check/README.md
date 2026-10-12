@@ -4,10 +4,15 @@ This is not part of the plugin's tests. It puts the plugin, running inside a
 real FiestaBoard, in front of a server that misbehaves on purpose, and
 compares what FiestaBoard renders with what it rendered the last time.
 
+It is kept under `tests/` only because FiestaBoard takes the code in every
+other folder for part of the running plugin, and refuses to install a plugin
+whose code reads a file that is not there, as this check's `scenario.json`
+is not until a run writes it. pytest does not collect anything here.
+
 ## What it is for
 
-The plugin's own tests (`tests/`) check the plugin's code: given this input,
-it does that. They run in seconds and need nothing but a FiestaBoard source
+The plugin's own tests (the `test_*.py` files in `tests/`) check the plugin's
+code: given this input, it does that. They run in seconds and need nothing but a FiestaBoard source
 tree. Every fault this check has found in the plugin has a test there.
 
 What those tests cannot see is everything around the plugin:

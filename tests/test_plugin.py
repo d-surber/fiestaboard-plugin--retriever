@@ -1449,7 +1449,7 @@ class TestAwkwardData:
     Data a well-behaved server would not send, and names nobody would choose: the plugin copes, and says what it can.
 
     These came from feeding the plugin a misbehaving server through a whole
-    FiestaBoard (see system_check/). What is tested here is the plugin's own
+    FiestaBoard (see tests/system_check/). What is tested here is the plugin's own
     part of each; what FiestaBoard then makes of the values is checked there.
     """
 
