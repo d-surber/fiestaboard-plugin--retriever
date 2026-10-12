@@ -30,7 +30,7 @@ def _load_module(name, path):
 
 
 retriever = _load_module("retriever_plugin_for_test_server", REPOSITORY_ROOT / "__init__.py")
-test_server = _load_module("retriever_test_server", REPOSITORY_ROOT / "test_server" / "retriever_test_server.py")
+test_server = _load_module("retriever_test_server", REPOSITORY_ROOT / "tests" / "test_server" / "retriever_test_server.py")
 
 TRANSPORT_KEY = bytes(range(32))
 ENCODED_TRANSPORT_KEY = base64.b64encode(TRANSPORT_KEY).decode()
@@ -258,7 +258,7 @@ class TestAwkwardFiles:
         assert data["limit"] == float("inf")
 
     def test_the_source_may_have_a_name_the_plugin_reserves(self):
-        source = test_server.ListSource(str(REPOSITORY_ROOT / "test_server" / "example.json"), "error")
+        source = test_server.ListSource(str(REPOSITORY_ROOT / "tests" / "test_server" / "example.json"), "error")
         assert list(source.config()) == ["error"]
 
 
@@ -362,7 +362,7 @@ class TestTheExample:
     """The example file shipped beside the server."""
 
     def test_the_example_file_is_a_list_the_server_can_serve(self):
-        source = test_server.ListSource(str(REPOSITORY_ROOT / "test_server" / "example.json"))
+        source = test_server.ListSource(str(REPOSITORY_ROOT / "tests" / "test_server" / "example.json"))
         elements = source.read_list()
         assert len(elements) >= 3
         assert [source.next_entry()[0]["data"] for _ in elements] == elements
