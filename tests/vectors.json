@@ -99,5 +99,18 @@
       },
       "request_id" : "00112233445566778899aabbccddeeff"
     }
+  },
+  "retrieve_one_source_from_plugin" : {
+    "body" : "9f43ce9bef21d728ddf6d45ac7de1151cf8c84c7e23a8f04bd12c6bd03fe656aa1b34114064174d91992456e62be1fed62bb94e9d4a0f590e18f695aab6fdcc6897c1b6d6682eb216827f39a8a127ed5dca1d097a7ea85ba20ba779fe6269e495561430488e1744d57d47232c8682bcb4991f112556dd9fc5fc8749bead539f94694e670ba6e7cf640cb00cbd8ddf93fbe72fc682fe2394a8866b32740e29bc8af0eb897af2fb57ab492423f5475c84ffa9785bd468dccd8c28d29c838ef22c63ff111189aba7c2c701fbceacdec8fc814b4d581d0facd0b4d7ea872890edf083ddfa6d0b2fd6724bc17790abedce29b7d054442",
+    "request_id" : "b328444343c90a78835533f71a45ddc0",
+    "required_protocol_version" : 1,
+    "source" : "day",
+    "source_parameters" : {
+      "all" : true,
+      "calendars" : "Work",
+      "days_from_today" : 2,
+      "half" : 0.5
+    },
+    "timestamp" : 1800000000
   }
 }

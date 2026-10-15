@@ -31,16 +31,23 @@ public protocol Source {
     ///
     /// Asked once for each entry in the module config, when the server
     /// starts, so that a mistake in the config is reported then and not
-    /// found one fetch at a time. It must not depend on anything that can
-    /// change while the server runs.
+    /// found one fetch at a time; and by the module before every fetch,
+    /// since a request may have set some of them. It must not depend on
+    /// anything that can change while the server runs.
     func problem(with parameters: SourceParameters) -> String?
+
+    /// The parameters a request may set, overriding what the module config
+    /// asks. None unless the module config's entry names them: what a
+    /// source may be asked is for the signed config to say.
+    var requestable: Set<String> { get }
 
     /// Reads the source's current data. Calls `done` exactly once, on any
     /// queue. A source never throws and never takes the server down: a
     /// problem is reported in the entry's `error`.
     /// - Parameter parameters: what this entry in the module config asks of
-    ///   the source; the same module may be asked different things under
-    ///   different names. They have passed `problem(with:)`.
+    ///   the source, with whatever a request set in its place; the same
+    ///   module may be asked different things under different names. They
+    ///   have passed `problem(with:)`.
     func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void)
 }
 
@@ -65,6 +72,16 @@ public extension Source {
 
     func problem(with parameters: SourceParameters) -> String? {
         ParametersSchema.problem(with: parameters, against: parametersSchema)
+    }
+
+    /// A request may set nothing unless the module config says otherwise.
+    var requestable: Set<String> { [] }
+
+    /// Why a request may not set these parameters, or nil if it may.
+    func refusal(of requested: SourceParameters) -> String? {
+        let refused = requested.keys.filter { !requestable.contains($0) }.sorted()
+        guard !refused.isEmpty else { return nil }
+        return "a request may not set " + refused.map { "\"\($0)\"" }.joined(separator: ", ")
     }
 
     /// The data to show when nothing is known: the schema's `default`.

@@ -25,6 +25,17 @@
         "description": "The key the server was installed with: base64 of 32 bytes.",
         "ui:widget": "password"
       },
+      "source": {
+        "type": "string",
+        "title": "Source",
+        "description": "Ask only this one of the server's sources, by its name. Leave empty to ask all of them."
+      },
+      "body": {
+        "type": "string",
+        "title": "Request Body",
+        "ui:widget": "textarea",
+        "description": "What to ask the source, in place of what the server's config asks, one parameter to a line as name: value. The server's config says which parameters a body may set. A value is a number, true or false if it reads as one, text in double quotes, or other text. {{= formula }} is worked out at each fetch; alone it keeps its type, and a date is sent as 2026-10-14T09:00:00-07:00. Formulas read only the clock, through NOW() and TODAY(). Objects and arrays cannot be sent."
+      },
       "values": {
         "type": "array",
         "title": "Values",

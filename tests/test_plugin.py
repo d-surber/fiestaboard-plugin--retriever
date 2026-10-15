@@ -11,6 +11,7 @@ import http.client
 import importlib.util
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -1099,6 +1100,13 @@ class TestInterop:
             assert retriever.default_value_for_schema(schema) == schema["default"]
             assert set(values[name]) == {"error", "data"}
 
+    def test_the_vector_that_asks_one_source_is_what_the_plugin_seals(self):
+        """The server's tests open this body and read the source and parameters from it."""
+        vector = INTEROP_VECTORS["retrieve_one_source_from_plugin"]
+        body = bytes.fromhex(vector["body"])
+        plaintext = ChaCha20Poly1305(self.key).decrypt(body[:12], body[12:], retriever.request_associated_data(RETRIEVE_PATH))
+        assert json.loads(plaintext) == {key: value for key, value in vector.items() if key != "body"}
+
     @pytest.mark.parametrize("path", [SERVER_INFO_PATH, CONFIG_PATH, RETRIEVE_PATH])
     def test_request_vector_is_what_the_plugin_seals(self, path):
         """The server's tests open this body; check here that it is still a current-format request."""
@@ -1560,3 +1568,187 @@ class TestAwkwardData:
         assert data["error"] == ""
         assert data["plain"] == formula_number(2)
         assert data["s"] == {"error": "", "data": deep}  # the row that would have copied it is skipped
+
+
+class TestRequestBody:
+    """The body a retrieve sends one source: one "name: value" a line, formulas worked out."""
+
+    @pytest.mark.parametrize(
+        ("written", "value"),
+        [
+            ("1", 1),
+            ("-3", -3),
+            ("+7", 7),
+            ("2.5", 2.5),
+            ("1e3", 1000.0),
+            ("true", True),
+            ("false", False),
+            ("Personal,Travel", "Personal,Travel"),
+            ('"1"', "1"),
+            ('"true"', "true"),
+            ('"[draft] note"', "[draft] note"),
+            ("True", "True"),
+            ("nan", "nan"),
+            ("inf", "inf"),
+            ("1_000", "1_000"),
+            ("18:00", "18:00"),
+            ("", ""),
+        ],
+    )
+    def test_a_value_without_formulas_is_a_number_or_truth_value_if_it_reads_as_one_and_quotes_make_it_text(self, written, value):
+        assert retriever.work_out_body(f"p: {written}") == ({"p": value}, [])
+
+    @pytest.mark.skipif(not ENGINE_RETURNS_TYPES, reason="needs an engine that returns a result with its type")
+    @pytest.mark.parametrize(
+        ("written", "value"),
+        [
+            ("{{=1+1}}", 2),
+            ("{{= 1/2 }}", 0.5),
+            ('{{="text"}}', "text"),
+            ('{{="1"}}', "1"),
+            ("{{=1>0}}", True),
+            ('{{=FORMATDATE(DATE("2026-10-14"), "YYYY-MM-DD")}}', "2026-10-14"),
+        ],
+    )
+    def test_a_formula_alone_keeps_its_type(self, written, value):
+        parameters, errors = retriever.work_out_body(f"p: {written}")
+        assert errors == []
+        assert parameters["p"] == value and type(parameters["p"]) is type(value)
+
+    @pytest.mark.skipif(not ENGINE_RETURNS_TYPES, reason="needs an engine that returns a result with its type")
+    def test_a_date_alone_is_sent_as_iso_8601_with_its_offset(self):
+        parameters, errors = retriever.work_out_body("now: {{=NOW()}}\ntoday: {{=TODAY()}}")
+        assert errors == []
+        moment = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d([+-]\d\d:\d\d)?"
+        assert re.fullmatch(moment, parameters["now"])
+        assert re.fullmatch(moment, parameters["today"]) and "T00:00:00" in parameters["today"]
+
+    def test_formulas_in_text_or_in_quotes_give_text(self):
+        parameters, errors = retriever.work_out_body('a: {{="x"}} and {{=1+1}}\nb: "{{=1+1}}"\nc: day {{=2}} of 7')
+        assert errors == []
+        assert parameters == {"a": "x and 2", "b": "2", "c": "day 2 of 7"}
+
+    def test_with_an_engine_that_only_renders_text_a_formula_alone_is_read_as_if_typed(self, monkeypatch):
+        monkeypatch.setattr(retriever, "evaluate_value", None)
+        assert retriever.work_out_body('n: {{=1+1}}\nt: {{="x"}}\nq: "{{=1+1}}"') == ({"n": 2, "t": "x", "q": "2"}, [])
+
+    def test_blank_lines_and_lines_beginning_with_a_hash_are_skipped_and_spaces_around_are_not_kept(self):
+        assert retriever.work_out_body("\n# what to ask\n  days_from_today :  1  \n\n  calendars:Work\n") == (
+            {"days_from_today": 1, "calendars": "Work"},
+            [],
+        )
+
+    def test_no_body_is_no_parameters(self):
+        assert retriever.work_out_body(None) == ({}, [])
+        assert retriever.work_out_body("") == ({}, [])
+        assert retriever.work_out_body("  \n# nothing\n") == ({}, [])
+
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            ("x: [1, 2]", "only single values can be sent, not objects or arrays"),
+            ('x: {"a": 1}', "only single values can be sent, not objects or arrays"),
+            ("x: {{weather.temp}}", "{{ }} may hold only a formula"),
+            ("x: a {{weather.temp}} b", "{{ }} may hold only a formula"),
+            ("x: {{=1+1", "{{ }} may hold only a formula"),
+            ("x: {{=}}", "{{= }} holds no formula"),
+            ("x: {{=retriever.s.data}}", "the formula gives #REF"),
+            ("x: {{=1/0}}", "the formula gives #DIV/0"),
+            ("x: a {{=1/0}}", "a formula gives #DIV/0"),
+            ("x: {{=NOPE(1)}}", "NOPE"),
+            ("x 1", "write a parameter as name: value"),
+            ("2x: 1", "write a parameter as name: value"),
+            ("x-y: 1", "write a parameter as name: value"),
+            ("x: 1\nx: 2", "x is set twice"),
+        ],
+    )
+    def test_a_value_that_cannot_be_sent_is_reported_with_its_line_and_nothing_is_sent(self, body, message):
+        parameters, errors = retriever.work_out_body("fine: 1\n" + body)
+        assert parameters == {}
+        assert len(errors) == 1
+        assert errors[0].startswith("Request body line ")
+        assert message in errors[0]
+
+    def test_a_body_that_is_not_text_is_reported(self):
+        assert retriever.work_out_body(["x: 1"]) == ({}, ["Request body must be text"])
+
+
+class TestAskingOneSource:
+    """An instance that names a source asks only that one, and may send it a body."""
+
+    def test_without_a_source_a_retrieve_asks_every_source_as_before(self, plugin, server):
+        plugin.fetch_data()
+        retrieve = server.requests[-1]
+        assert "source" not in retrieve and "source_parameters" not in retrieve
+
+    def test_a_retrieve_names_the_source_and_carries_what_the_body_sets(self, plugin, server):
+        plugin.config = {**plugin.config, "source": " reminders ", "body": "days_from_today: 1\ncalendars: Work"}
+        result = plugin.fetch_data()
+        assert result.data["error"] == ""
+        retrieve = server.requests[-1]
+        assert retrieve["source"] == "reminders"
+        assert retrieve["source_parameters"] == {"days_from_today": 1, "calendars": "Work"}
+        assert [request.get("source") for request in server.requests[:-1]] == [None, None]
+
+    def test_a_source_without_a_body_sends_no_parameters(self, plugin, server):
+        plugin.config = {**plugin.config, "source": "reminders"}
+        plugin.fetch_data()
+        assert server.requests[-1]["source"] == "reminders"
+        assert "source_parameters" not in server.requests[-1]
+
+    def test_formulas_are_worked_out_again_at_every_fetch(self, plugin, server, monkeypatch):
+        plugin.config = {**plugin.config, "source": "reminders", "body": "n: {{=1+1}}"}
+        plugin.fetch_data()
+        monkeypatch.setattr(retriever, "work_out_body", lambda text: ({"n": 3}, []))
+        plugin.fetch_data()
+        assert [request["source_parameters"] for request in server.requests if "source" in request] == [{"n": 2}, {"n": 3}]
+
+    def test_a_body_that_cannot_be_sent_fails_the_fetch_without_asking(self, plugin, server):
+        plugin.config = {**plugin.config, "source": "reminders", "body": "x: {{=1/0}}"}
+        result = plugin.fetch_data()
+        assert_retrieve_failed(result, "Request body line 1 (x): the formula gives #DIV/0")
+        assert RETRIEVE_PATH not in server.requested_paths
+
+    def test_a_body_needs_a_source(self, plugin, server):
+        plugin.config = {**plugin.config, "body": "x: 1"}
+        assert_retrieve_failed(plugin.fetch_data(), "A request body needs a source to ask")
+        assert plugin.validate_config(plugin.config) == ["A request body needs a source to ask"]
+
+    def test_after_a_failed_retrieve_only_the_named_source_has_its_default(self, plugin, server):
+        server.source_schemas = {**SOURCE_SCHEMAS, "other": {"type": "integer", "default": 0}}
+        plugin.config = {**plugin.config, "source": "reminders"}
+        plugin.fetch_data()
+        server.refuse(400, "Stale Timestamp", (RETRIEVE_PATH,))
+        result = plugin.fetch_data()
+        assert_fetch_failed(result, "400 Stale Timestamp", {"reminders": DEFAULT_REMINDERS, "server": SERVER_INFO})
+
+    def test_a_source_the_server_does_not_serve_is_reported_as_it_says(self, plugin, server):
+        plugin.config = {**plugin.config, "source": "nowhere"}
+        plugin.fetch_data()
+        server.refuse(400, "Unknown Source", (RETRIEVE_PATH,))
+        assert_fetch_failed(plugin.fetch_data(), "400 Unknown Source", {"server": SERVER_INFO})
+
+    def test_saving_checks_that_the_server_serves_the_source(self, plugin, server):
+        settings = {**plugin.config, "source": "nowhere", "body": "x: 1"}
+        assert plugin.validate_config(settings) == ["The server serves no source named nowhere (it serves: reminders)"]
+        assert plugin.validate_config({**settings, "source": "reminders"}) == []
+
+    def test_saving_a_source_is_not_held_up_by_a_server_that_does_not_answer(self, plugin, server):
+        server.refuse(503, "Service Unavailable")
+        assert plugin.validate_config({**plugin.config, "source": "nowhere"}) == []
+
+    def test_saving_reports_every_line_of_the_body_that_cannot_be_sent(self, plugin, server):
+        errors = plugin.validate_config({**plugin.config, "source": "reminders", "body": "a: [1]\nb: 2\nc: {{=1/0}}"})
+        assert [error.split(":")[0] for error in errors] == ["Request body line 1 (a)", "Request body line 3 (c)"]
+
+    def test_the_preview_asks_what_a_fetch_asks(self, plugin, server):
+        plugin.config = {**plugin.config, "source": "reminders", "body": "n: 2"}
+        plugin.get_preview_text()
+        assert server.requests[-1]["source"] == "reminders"
+        assert server.requests[-1]["source_parameters"] == {"n": 2}
+
+    def test_the_preview_says_what_is_wrong_with_the_body(self, plugin, server):
+        plugin.config = {**plugin.config, "source": "reminders", "body": "n: [1]"}
+        with pytest.raises(retriever.PreviewUnavailable, match="Request body line 1"):
+            plugin.get_preview_text()
+        assert server.requested_paths == []

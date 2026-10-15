@@ -38,9 +38,9 @@ private final class TestModule {
     deinit { listener.invalidate() }
 }
 
-/// What a source reports when asked once.
-private func fetched(_ source: Source) async -> Entry {
-    await withCheckedContinuation { continuation in source.fetch(parameters: [:]) { continuation.resume(returning: $0) } }
+/// What a source reports when asked once, with what a request set.
+private func fetched(_ source: Source, asking requested: SourceParameters = [:]) async -> Entry {
+    await withCheckedContinuation { continuation in source.fetch(parameters: requested) { continuation.resume(returning: $0) } }
 }
 
 private let serviceName = Signer.moduleIdentifier(for: "asked")
@@ -113,13 +113,35 @@ func parametersAreCheckedAgainstWhatTheSourceDeclares(parameters: SourceParamete
         #expect(await fetched(remote) == Entry(error: "", data: [:]))
     }
 
-    @Test func whoeverAsksCannotChangeWhatTheModuleIsAsked() async throws {
+    @Test func unlessTheEntrySaysSoARequestCannotChangeWhatTheModuleIsAsked() async throws {
         let module = TestModule(AskedSource())
         let remote = try RemoteSource(serviceName: serviceName, parameters: ["what": "apples"], connect: module.connect)
-        let entry = await withCheckedContinuation { continuation in
-            remote.fetch(parameters: ["what": "something else", "how_many": 9]) { continuation.resume(returning: $0) }
-        }
-        #expect(entry == Entry(error: "", data: ["what": "apples"]))
+        let entry = await fetched(remote, asking: ["what": "something else", "how_many": 9])
+        #expect(entry == Entry(error: "a request may not set \"how_many\", \"what\"", data: remote.defaultData))
+    }
+
+    @Test func aRequestMaySetWhatTheEntryLetsItAndTheRestIsTheEntrys() async throws {
+        let module = TestModule(AskedSource())
+        let remote = try RemoteSource(serviceName: serviceName, parameters: ["what": "apples", "how_many": 3], requestable: ["how_many"],
+                                      connect: module.connect)
+        #expect(remote.parameterProblem == nil)
+        #expect(await fetched(remote, asking: ["how_many": 5]) == Entry(error: "", data: ["what": "apples", "how_many": 5]))
+        #expect(await fetched(remote) == Entry(error: "", data: ["what": "apples", "how_many": 3]))
+        #expect(await fetched(remote, asking: ["how_many": 5, "what": "pears"]).error == "a request may not set \"what\"")
+    }
+
+    @Test func aValueARequestSetIsCheckedByTheModuleBeforeItAnswers() async throws {
+        let module = TestModule(AskedSource())
+        let remote = try RemoteSource(serviceName: serviceName, requestable: ["how_many"], connect: module.connect)
+        let entry = await fetched(remote, asking: ["how_many": 12])
+        #expect(entry == Entry(error: "the parameter \"how_many\" must be at most 9, not 12", data: remote.defaultData))
+    }
+
+    @Test func anEntryCannotLetARequestSetAParameterTheModuleDoesNotTake() async throws {
+        let module = TestModule(AskedSource())
+        let remote = try RemoteSource(serviceName: serviceName, requestable: ["how_many", "colour"], connect: module.connect)
+        #expect(remote.parameterProblem == "lets a request set \"colour\", which its module does not take")
+        #expect(await fetched(remote, asking: ["how_many": 1]).error == "lets a request set \"colour\", which its module does not take")
     }
 
     @Test func parametersTheModuleWillNotTakeAreFoundWhenTheSourceIsSetUpAndThenReportedByIt() async throws {
@@ -187,6 +209,21 @@ func aSourceCannotBeGivenANameThatIsTaken(name: String) throws {
     #expect(config.modules[0].sourceName == "os")
 }
 
+@Test func whatABodyMaySetIsInWhatIsSignedAndAConfigWithoutItReadsAsNone() throws {
+    var entry = calendarEntry("day")
+    entry.requestable = ["days_from_today"]
+    let written = ModuleConfig(version: 1, expires: now, modules: [entry]).encoded()
+    #expect(ModuleConfig.decode(written)?.modules == [entry])
+    #expect(calendarEntry("day").requestable == nil)
+}
+
+@Test(arguments: [[""], ["days_from_today", "days_from_today"]])
+func whatABodyMaySetHasNoEmptyOrRepeatedName(requestable: [String]) throws {
+    var entry = calendarEntry("day")
+    entry.requestable = requestable
+    #expect(try verdict([entry]) == .invalid("module config lets a request set the parameters of \"day\" with a name that is empty or given twice"))
+}
+
 @Test func anEntrysNameAndParametersAreInWhatIsSigned() throws {
     let entry = calendarEntry("tomorrow", ["days_from_today": 1, "calendar": "Work"])
     let written = ModuleConfig(version: 1, expires: now, modules: [entry]).encoded()
@@ -228,12 +265,29 @@ func aSourceCannotBeGivenANameThatIsTaken(name: String) throws {
     #expect(throws: ModuleConfigCommand.Problem.self) { try ModuleConfigCommand.Options(["--name"]) }
 }
 
+@Test func whatABodyMaySetIsGivenOnTheCommandLine() throws {
+    #expect(try ModuleConfigCommand.Options(["--body", "days_from_today, calendars"]).requestable == ["days_from_today", "calendars"])
+    #expect(try ModuleConfigCommand.Options(["--body", "a", "--body", "b"]).requestable == ["a", "b"])
+    #expect(throws: ModuleConfigCommand.Problem.self) { try ModuleConfigCommand.Options(["--body"]) }
+}
+
 @Test(arguments: [
     ("1", JSON.int(1)), ("-3", .int(-3)), ("1.5", .double(1.5)), ("true", .bool(true)), ("false", .bool(false)), ("Work", .string("Work")),
     ("\"1\"", .string("1")), ("\"true\"", .string("true")), ("", .string("")), ("a=b", .string("a=b")), ("nan", .string("nan")), ("True", .string("True")),
+    ("+2", .int(2)), (".5", .double(0.5)), ("5.", .double(5)), ("1e3", .double(1000)), ("0x10", .string("0x10")), ("inf", .string("inf")),
+    ("1e999", .string("1e999")), (" 1", .string(" 1")), ("\"{a}\"", .string("{a}")), ("a{b}", .string("a{b}")),
 ])
-func aValueTypedOnTheCommandLineIsANumberOrATruthValueIfItReadsAsOne(written: String, value: JSON) {
-    #expect(ModuleConfigCommand.parameterValue(written) == value)
+func aValueTypedOnTheCommandLineIsReadAsABodyReadsIt(written: String, value: JSON) throws {
+    #expect(try ModuleConfigCommand.parameterValue(written) == value)
+}
+
+@Test(arguments: ["{\"a\": 1}", "[1, 2]", "{{=NOW()}}", "\"{{=NOW()}}\"", "day {{=1+1}}", "{{weather.temp}}", "a}}b"])
+func aValueTypedOnTheCommandLineIsOneValueAndNoFormula(written: String) {
+    #expect(throws: ModuleConfigCommand.Problem.self) { try ModuleConfigCommand.parameterValue(written) }
+}
+
+@Test func aRefusedValueIsReportedWithItsParameter() {
+    #expect { try ModuleConfigCommand.Options(["--set", "days=[1]"]) } throws: { "\($0)".hasPrefix("--set days: only single values") }
 }
 
 @Test func aValueMayHaveAnEqualsSignInIt() throws {
@@ -250,4 +304,9 @@ func aValueTypedOnTheCommandLineIsANumberOrATruthValueIfItReadsAsOne(written: St
 @Test func whatAnEntryAsksIsShownAsItWasTyped() {
     #expect(ModuleConfigCommand.asked(of: calendarEntry(nil)) == "")
     #expect(ModuleConfigCommand.asked(of: calendarEntry("x", ["days_from_today": 1, "calendar": "Work"])) == ", asked calendar=\"Work\" days_from_today=1")
+    var entry = calendarEntry("x", ["calendars": "Work"])
+    entry.requestable = ["days_from_today"]
+    #expect(ModuleConfigCommand.asked(of: entry) == ", asked calendars=\"Work\", the body may set days_from_today")
+    entry.parameters = nil
+    #expect(ModuleConfigCommand.asked(of: entry) == ", the body may set days_from_today")
 }

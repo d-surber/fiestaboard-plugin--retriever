@@ -5,7 +5,11 @@ import RetrieverSourceKit
 /// for each. A source that has not answered within `timeout` is reported as
 /// such, so one slow source cannot hold up the others. Of two sources with
 /// one name, the first to answer is the one reported.
-func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQueue = .main, _ done: @escaping ([String: Entry]) -> Void) {
+///
+/// `parameters` are what a request set; a source they are not all
+/// requestable from reports that and is not asked.
+func retrieve(from sources: [Source], parameters: SourceParameters = [:], timeout: TimeInterval, on queue: DispatchQueue = .main,
+              _ done: @escaping ([String: Entry]) -> Void) {
     var entries: [String: Entry] = [:]   // only touched on `queue`
     let asked = Date()
     let namesToHearFrom = Set(sources.map(\.name)).count
@@ -21,7 +25,12 @@ func retrieve(from sources: [Source], timeout: TimeInterval, on queue: DispatchQ
     }
     queue.async {
         for source in sources {
-            source.fetch(parameters: [:]) { entry in
+            if let refusal = source.refusal(of: parameters) {
+                entries[source.name] = entries[source.name] ?? source.failed(refusal)
+                if entries.count == namesToHearFrom { finish() }
+                continue
+            }
+            source.fetch(parameters: parameters) { entry in
                 queue.async {
                     guard !finished, entries[source.name] == nil else { return }
                     entries[source.name] = entry

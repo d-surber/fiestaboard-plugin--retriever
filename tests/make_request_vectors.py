@@ -45,6 +45,17 @@ def main() -> None:
         if protocol_version is not None:
             requests[endpoint_path]["required_protocol_version"] = protocol_version
     vectors["requests_from_plugin"] = requests
+    # A retrieve that names one source and carries a body.
+    source, source_parameters = "day", {"days_from_today": 2, "calendars": "Work", "all": True, "half": 0.5}
+    body, request_id = plugin.encrypt_request(transport_key, TIMESTAMP, plugin.RETRIEVE_PATH, 1, source, source_parameters)
+    vectors["retrieve_one_source_from_plugin"] = {
+        "timestamp": TIMESTAMP,
+        "request_id": request_id,
+        "required_protocol_version": 1,
+        "source": source,
+        "source_parameters": source_parameters,
+        "body": body.hex(),
+    }
     VECTORS_FILE.write_text(json.dumps(vectors, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
 

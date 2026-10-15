@@ -20,7 +20,10 @@ final class RemoteSource: Source {
     let parametersSchema: JSON
     /// What the entry asks of the module on every fetch.
     let parameters: SourceParameters
-    /// What the module found wrong with `parameters`, if anything. While
+    /// The parameters a request may set in place of the entry's.
+    let requestable: Set<String>
+    /// What the module found wrong with `parameters`, or a parameter in
+    /// `requestable` the module does not take, if anything. While
     /// there is something, the module is not asked for data: the source
     /// reports this instead, so that the mistake shows wherever the source does.
     let parameterProblem: String?
@@ -60,14 +63,16 @@ final class RemoteSource: Source {
     /// - Parameters:
     ///   - name: the name to serve the source under; nil for the module's own.
     ///   - parameters: what to ask the module on every fetch.
+    ///   - requestable: the parameters a request may set in their place.
     /// - Throws: `Failure` if the module cannot be reached, is refused for
     ///   its signature, or describes itself as some other module's source.
     ///   Parameters it does not accept are not a failure to reach it: see `parameterProblem`.
     init(serviceName: String, cdhash: String? = nil, name: String? = nil, parameters: SourceParameters = [:],
-         timeout: TimeInterval = RemoteSource.answerTimeout, connect: @escaping Connect = RemoteSource.signedConnection) throws {
+         requestable: Set<String> = [], timeout: TimeInterval = RemoteSource.answerTimeout, connect: @escaping Connect = RemoteSource.signedConnection) throws {
         self.serviceName = serviceName
         self.cdhash = cdhash
         self.parameters = parameters
+        self.requestable = requestable
         self.connect = connect
 
         let described: Result<Data, Failure> = Self.ask(serviceName, cdhash, connect, timeout: timeout) { $0.describe(reply: $1) }
@@ -86,17 +91,20 @@ final class RemoteSource: Source {
             $0.problem(withParameters: encoded, reply: $1)
         }
         switch checked {
-        case .success(let problem): parameterProblem = problem.isEmpty ? nil : problem
+        case .success(let problem) where !problem.isEmpty: parameterProblem = problem
+        case .success: parameterProblem = Self.untaken(requestable, by: parametersSchema)
         case .failure(let failure): throw failure
         }
     }
 
-    /// Asks the module for its data, with this entry's parameters. The
-    /// `parameters` argument is not used: what a module is asked is fixed by
-    /// the signed config, never by whoever is asking.
-    func fetch(parameters _: SourceParameters, _ done: @escaping (Entry) -> Void) {
+    /// Asks the module for its data, with this entry's parameters and, in
+    /// place of any of them, what a request set. A request may set only
+    /// what the signed config lets it; anything else and the module is not
+    /// asked. The module checks what it is given before it answers.
+    func fetch(parameters requested: SourceParameters, _ done: @escaping (Entry) -> Void) {
         if let parameterProblem { return done(failed(parameterProblem)) }
-        let encoded = Self.encoded(parameters)
+        if let refusal = refusal(of: requested) { return done(failed(refusal)) }
+        let encoded = Self.encoded(parameters.merging(requested) { _, asked in asked })
         DispatchQueue.global().async {
             let answer: Result<Data, Failure> = Self.ask(self.serviceName, self.cdhash, self.connect, timeout: Self.answerTimeout) {
                 $0.fetch(parameters: encoded, reply: $1)
@@ -109,6 +117,18 @@ final class RemoteSource: Source {
                 done(self.failed("module unavailable"))
             }
         }
+    }
+
+    /// Which of `requestable` a module's parameters schema does not
+    /// declare, as a problem with the entry; nil if it declares them all.
+    static func untaken(_ requestable: Set<String>, by parametersSchema: JSON) -> String? {
+        var declared: Set<String> = []
+        if case .object(let schema) = parametersSchema, case .object(let properties)? = schema["properties"] {
+            declared = Set(properties.keys)
+        }
+        let untaken = requestable.subtracting(declared).sorted()
+        guard !untaken.isEmpty else { return nil }
+        return "lets a request set " + untaken.map { "\"\($0)\"" }.joined(separator: ", ") + ", which its module does not take"
     }
 
     private static func encoded(_ parameters: SourceParameters) -> Data {

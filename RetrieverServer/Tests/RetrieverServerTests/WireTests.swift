@@ -62,10 +62,28 @@ func refusesBodiesThatAreNotMessages(body: Data) {
     #"{"timestamp": 1800000000}"#,
     #"{"timestamp": 1800000000, "request_id": ""}"#,
     #"{"timestamp": 1800000000, "request_id": "\#(String(repeating: "x", count: 65))"}"#,
+    #"{"timestamp": 1800000000, "request_id": "abc123", "source_parameters": {"n": 1}}"#,
+    #"{"timestamp": 1800000000, "request_id": "abc123", "source": "", "source_parameters": {"n": 1}}"#,
+    #"{"timestamp": 1800000000, "request_id": "abc123", "source": "x", "source_parameters": [1]}"#,
 ])
 func refusesAuthenticButMalformedRequests(plaintext: String) throws {
     let body = try sealedRequest(plaintext)
     #expect(throws: Wire.Failure.malformed) { try Wire.open(request: body, path: Wire.retrievePath, key: transportKey, now: now) }
+}
+
+@Test func aRetrieveMayNameOneSourceAndWhatToAskIt() throws {
+    let plaintext = #"{"timestamp": 1800000000, "request_id": "abc123", "source": "day", "source_parameters": {"days_from_today": 2, "calendars": "Work"}}"#
+    let accepted = try Wire.open(request: try sealedRequest(plaintext), path: Wire.retrievePath, key: transportKey, now: now)
+    #expect(accepted == Wire.Accepted(id: "abc123", protocolVersion: 1, source: "day", parameters: ["days_from_today": 2, "calendars": "Work"]))
+    let alone = try Wire.open(request: try sealedRequest(#"{"timestamp": 1800000000, "request_id": "abc123", "source": "day"}"#),
+                              path: Wire.retrievePath, key: transportKey, now: now)
+    #expect(alone == Wire.Accepted(id: "abc123", protocolVersion: 1, source: "day"))
+}
+
+@Test func onlyARetrieveIsAskedOfOneSource() throws {
+    let plaintext = #"{"timestamp": 1800000000, "request_id": "abc123", "source": "day", "source_parameters": {"n": 1}}"#
+    let body = try sealedRequest(plaintext, authenticatedData: Wire.requestAuthenticatedData(Wire.configPath))
+    #expect(try Wire.open(request: body, path: Wire.configPath, key: transportKey, now: now) == Wire.Accepted(id: "abc123", protocolVersion: 1))
 }
 
 @Test func sealsAResponseThatEchoesTheID() throws {
@@ -114,8 +132,19 @@ private struct InteropVectors: Decodable {
         enum CodingKeys: String, CodingKey { case requestID = "request_id", configFingerprint = "config_fingerprint", body }
     }
 
+    struct OneSourceVector: Decodable {
+        let timestamp: Int
+        let requestID: String
+        let source: String
+        let parameters: SourceParameters
+        let body: String
+
+        enum CodingKeys: String, CodingKey { case timestamp, requestID = "request_id", source, parameters = "source_parameters", body }
+    }
+
     let key: String
     let requests_from_plugin: [String: RequestVector]    // by path
+    let retrieve_one_source_from_plugin: OneSourceVector
     let responses_from_server: [String: ResponseVector]  // by path
 
     /// Reads tests/vectors.json from the repository this file is in.
@@ -162,6 +191,16 @@ private func bytes(hex: String) -> Data {
             try Wire.open(request: bytes(hex: request.body), path: other, key: transportKey, now: sentAt)
         }
     }
+}
+
+@Test func readsTheSourceAndParametersOfARetrieveSealedByThePlugin() throws {
+    let vectors = try InteropVectors.load()
+    let request = vectors.retrieve_one_source_from_plugin
+    let transportKey = try #require(Wire.transportKey(base64: vectors.key))
+    let sentAt = Date(timeIntervalSince1970: TimeInterval(request.timestamp))
+    let accepted = try Wire.open(request: bytes(hex: request.body), path: Wire.retrievePath, key: transportKey, now: sentAt)
+    #expect(accepted == Wire.Accepted(id: request.requestID, protocolVersion: 1, source: request.source, parameters: request.parameters))
+    #expect(accepted.parameters == ["days_from_today": 2, "calendars": "Work", "all": true, "half": .double(0.5)])
 }
 
 @Test func retrieveResponseVectorIsWhatTheServerSeals() throws {

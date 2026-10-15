@@ -25,6 +25,9 @@ Settings, all from the environment:
                          If unset, one is made and printed at start.
   RETRIEVER_TEST_PORT    the port to listen on (default 42512)
   RETRIEVER_TEST_SOURCE  the name of the source (default "test")
+  RETRIEVER_TEST_BODY    the parameters a request's body may set, separated
+                         by commas (default none). The data does not change
+                         with them; what a body set is written to the log.
 
 Run it with:
 
@@ -78,6 +81,14 @@ CLIENT_READ_TIMEOUT_SECONDS = 60
 
 DEFAULT_PORT = 42512
 DEFAULT_SOURCE_NAME = "test"
+
+
+class Asked(NamedTuple):
+    """What a request asks: its ID, and for /retrieve the one source it names, if any, and what its body sets."""
+
+    request_id: str
+    source: str | None = None
+    parameters: dict[str, Any] | None = None
 
 
 def request_associated_data(endpoint_path: str) -> bytes:
@@ -286,13 +297,22 @@ class TestServer(ThreadingHTTPServer):
 
     Attributes:
         source: The source it serves.
+        body_may_set: The parameters a request's body may set.
         cipher: Encrypts and decrypts with the transport key.
         log: Called with one line of text for each request handled.
     """
 
-    def __init__(self, port: int, source: ListSource, transport_key: bytes, log: Callable[[str], None]):
+    def __init__(
+        self,
+        port: int,
+        source: ListSource,
+        transport_key: bytes,
+        log: Callable[[str], None],
+        body_may_set: frozenset[str] = frozenset(),
+    ):
         super().__init__(("", port), RequestHandler)
         self.source = source
+        self.body_may_set = body_may_set
         self.cipher = ChaCha20Poly1305(transport_key)
         self.log = log
 
@@ -315,13 +335,15 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """Answer a request: with a response, a refusal that says why, or nothing at all."""
         try:
-            request_id = self._check_request(self._decrypt_request_body())
+            asked = self._check_request(self._decrypt_request_body())
+            if asked.source is not None and asked.source != self.server.source.source_name:
+                raise _Refuse("Unknown Source")
         except _SayNothing as silence:
             self._close_without_answering(str(silence))
         except _Refuse as refusal:
             self._send_refusal(str(refusal))
         else:
-            self._send_response(request_id)
+            self._send_response(asked)
 
     def do_GET(self) -> None:
         """Say nothing to any method but POST."""
@@ -359,12 +381,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             raise _SayNothing("does not decrypt") from None
 
-    def _check_request(self, plaintext: bytes) -> str:
+    def _check_request(self, plaintext: bytes) -> Asked:
         """
-        Check a decrypted request: {"timestamp", "request_id", "required_protocol_version"?}.
+        Check a decrypted request: {"timestamp", "request_id",
+        "required_protocol_version"?, "source"?, "source_parameters"?}. The
+        last two are read only for /retrieve, and parameters need a source.
 
         Returns:
-            The request's ID, for the response to echo.
+            What it asks: its ID, for the response to echo, and for
+            /retrieve the source it names and what its body sets.
 
         Raises:
             _Refuse: "Bad Request" if it is not that; "Stale Timestamp" if
@@ -390,15 +415,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         is_spoken = MIN_PROTOCOL_VERSION <= protocol_version <= MAX_PROTOCOL_VERSION
         if self.path != SERVER_INFO_PATH and not is_spoken:
             raise _Refuse("Unsupported Protocol")
-        return request_id
+        if self.path != RETRIEVE_PATH:
+            return Asked(request_id)
 
-    def _send_response(self, request_id: str) -> None:
+        source, parameters = request.get("source"), request.get("source_parameters", {})
+        source_is_usable = source is None or (isinstance(source, str) and source)
+        if not source_is_usable or not isinstance(parameters, dict) or (parameters and source is None):
+            raise _Refuse("Bad Request")
+        return Asked(request_id, source, parameters)
+
+    def _send_response(self, asked: Asked) -> None:
         """
         Send the endpoint's data, encrypted, echoing the request's ID.
 
         The file is read once, and the data and the fingerprint both
-        come from that reading. Only /retrieve moves the list on.
+        come from that reading. Only /retrieve moves the list on, and not
+        when its body sets what it may not: then the source's error says so.
         """
+        request_id = asked.request_id
         source = self.server.source
         contents = source.read_file()
         log_note = ""
@@ -407,7 +441,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif self.path == CONFIG_PATH:
             data = source.config(contents)
         else:
-            entry, log_note = source.next_entry(contents)
+            refused = sorted(name for name in asked.parameters or {} if name not in self.server.body_may_set)
+            if refused:
+                log_note = "a request may not set " + ", ".join(f'"{name}"' for name in refused)
+                entry = {"error": log_note, "data": source.data_schema(contents).get("default")}
+            else:
+                entry, log_note = source.next_entry(contents)
+                if asked.parameters:
+                    log_note += f"; body {json.dumps(asked.parameters, sort_keys=True)}"
             data = {source.source_name: entry}
 
         message = {"request_id": request_id, "config_fingerprint": source.config_fingerprint(contents), "data": data}
@@ -447,6 +488,7 @@ def create_server(
     port: int,
     source_name: str = DEFAULT_SOURCE_NAME,
     log: Callable[[str], None] = print,
+    body_may_set: frozenset[str] = frozenset(),
 ) -> TestServer:
     """
     Make a server, listening and ready to run with ``serve_forever()``.
@@ -455,8 +497,9 @@ def create_server(
         port: The port to listen on, on every interface; 0 picks a free one,
             which ``server_port`` then gives.
         log: Called with one line of text for each request handled.
+        body_may_set: The parameters a request's body may set.
     """
-    return TestServer(port, ListSource(list_file_path, source_name), transport_key, log)
+    return TestServer(port, ListSource(list_file_path, source_name), transport_key, log, body_may_set)
 
 
 def decode_transport_key(encoded_key: str) -> bytes | None:
@@ -501,8 +544,9 @@ def main() -> int:
         print("RETRIEVER_TEST_PORT must be a number.", file=sys.stderr)
         return 2
     source_name = os.environ.get("RETRIEVER_TEST_SOURCE", DEFAULT_SOURCE_NAME)
+    body_may_set = frozenset(name.strip() for name in os.environ.get("RETRIEVER_TEST_BODY", "").split(",") if name.strip())
 
-    server = create_server(list_file_path, transport_key, port, source_name, log_with_time)
+    server = create_server(list_file_path, transport_key, port, source_name, log_with_time, body_may_set)
     log_with_time(
         f'{SERVER_NAME} {SERVER_VERSION} on port {server.server_port}, source "{source_name}", file {list_file_path}'
     )
@@ -511,6 +555,8 @@ def main() -> int:
         log_with_time(f"warning: {contents.problem}")
     else:
         log_with_time(f"{len(contents.elements)} elements; the next retrieve sends element 0")
+    if body_may_set:
+        log_with_time("a request's body may set: " + ", ".join(sorted(body_may_set)))
     if key_was_generated:
         log_with_time(f"key (enter it in the plugin's settings): {encoded_key}")
 

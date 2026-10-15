@@ -156,7 +156,11 @@ final class RequestListener {
         }
         if path == Wire.serverInfoPath { send(serverInfo) }
         else if path == Wire.configPath { send(state.sourceConfig.schemas) }
-        else { retrieve(from: state.sources, timeout: limits.sourceTimeout, on: queue) { send($0) } }
+        else {
+            let asked = accepted.source.map { name in state.sources.filter { $0.name == name } } ?? state.sources
+            guard !asked.isEmpty || accepted.source == nil else { return respond(exchange, path, Wire.Failure.unknownSource.status!) }
+            retrieve(from: asked, parameters: accepted.parameters, timeout: limits.sourceTimeout, on: queue) { send($0) }
+        }
 
         // A module that could not be reached is tried again now that a
         // request has come, after this one is answered so it is not held up.

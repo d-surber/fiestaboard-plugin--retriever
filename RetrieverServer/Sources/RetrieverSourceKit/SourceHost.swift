@@ -77,6 +77,10 @@ public enum SourceHost {
             guard let parameters = try? JSONDecoder().decode(SourceParameters.self, from: parameters) else {
                 return reply((try? JSONEncoder().encode(source.failed("its parameters could not be read"))) ?? Data())
             }
+            // Checked again here, and not only when the server started: a request may have set some of them.
+            if let problem = source.problem(with: parameters) {
+                return reply((try? JSONEncoder().encode(source.failed(problem))) ?? Data())
+            }
             source.fetch(parameters: parameters) { entry in reply((try? JSONEncoder().encode(entry)) ?? Data()) }
         }
     }

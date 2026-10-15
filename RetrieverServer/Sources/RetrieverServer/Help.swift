@@ -52,7 +52,7 @@ enum Help {
               allows only that exact build, so a rebuilt module must be added
               again.
 
-          RetrieverServer config add <module> --name <name> [--set <parameter>=<value> ...]
+          RetrieverServer config add <module> --name <name> [--set <parameter>=<value> ...] [--body <parameter>,...]
               Allows a source under a name of your choosing, and says what its
               module is to be asked. A module that takes parameters can be
               listed as often as you like, each time under another name:
@@ -60,10 +60,16 @@ enum Help {
                 config add local.retriever-source.calendar --name tomorrow --set days_from_today=1
               A name is lower-case letters, digits and underscores. A value
               that reads as a number or as true or false is one; put it in
-              quotes to make it text. The module is asked whether it takes
+              quotes to make it text. A value is a single one, never an
+              object or array, and holds no formula: {{= }} is for the
+              body. The module is asked whether it takes
               these before they are signed, and again when the server starts:
               a source with parameters its module will not take is served
               with that as its error.
+              --body names the parameters the body of a request from the
+              plugin may set in place of these; without it the body can set
+              none:
+                config add local.retriever-source.calendar --name day --body days_from_today
 
           RetrieverServer config remove <source name or module identifier>
               Stops allowing a source, or every source of a module.

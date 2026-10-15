@@ -9,6 +9,7 @@ import base64
 import http.client
 import importlib.util
 import json
+import os
 import socket
 import threading
 import time
@@ -17,6 +18,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 REPOSITORY_ROOT = Path(__file__).parent.parent
 
@@ -44,11 +46,13 @@ ELEMENTS = [
 class RunningTestServer:
     """The test server, serving a list from a file a test can rewrite, for as long as the test runs."""
 
-    def __init__(self, tmp_path, elements=ELEMENTS):
+    def __init__(self, tmp_path, elements=ELEMENTS, body_may_set=frozenset()):
         self.list_file = tmp_path / "list.json"
         self.write(elements)
         self.log_lines = []
-        self.http_server = test_server.create_server(str(self.list_file), TRANSPORT_KEY, 0, log=self.log_lines.append)
+        self.http_server = test_server.create_server(
+            str(self.list_file), TRANSPORT_KEY, 0, log=self.log_lines.append, body_may_set=body_may_set
+        )
         self.url = f"http://127.0.0.1:{self.http_server.server_port}"
         threading.Thread(target=self.http_server.serve_forever, daemon=True).start()
 
@@ -338,6 +342,41 @@ class TestRefusals:
         plugin = retriever.RetrieverPlugin(json.loads((REPOSITORY_ROOT / "manifest.json").read_text()))
         plugin.config = {"server_url": running.url, "api_key": base64.b64encode(bytes(32)).decode()}
         assert plugin.fetch_data().data == {"error": "no response (wrong key?); config pending"}
+
+
+class TestOneSourceAndABody:
+    """A retrieve may name the one source and set what the server lets its body set, as the real server's does."""
+
+    @pytest.fixture
+    def running(self, tmp_path):
+        test_server_running = RunningTestServer(tmp_path, body_may_set=frozenset({"days"}))
+        yield test_server_running
+        test_server_running.stop()
+
+    def test_a_body_sets_what_the_server_lets_it_and_the_log_says_what(self, plugin, running):
+        plugin.config = {**plugin.config, "source": "test", "body": "days: {{=1+1}}"}
+        assert fetched_data(plugin)["test"] == {"error": "", "data": ELEMENTS[0]}
+        assert running.log_lines[-1].endswith('(element 0 of 3; body {"days": 2})')
+
+    def test_a_body_that_sets_anything_else_gets_the_sources_error_and_uses_up_no_element(self, plugin, running):
+        plugin.config = {**plugin.config, "source": "test", "body": "days: 1\nweeks: 2"}
+        data = fetched_data(plugin)
+        assert data["test"]["error"] == 'a request may not set "weeks"'
+        plugin.config = {**plugin.config, "body": ""}
+        assert fetched_data(plugin)["test"]["data"]["label"] == "first"
+
+    def test_a_source_it_does_not_serve_is_said_to_be_unknown(self, plugin, running):
+        plugin.config = {**plugin.config, "source": "other"}
+        assert fetched_data(plugin)["error"] == "400 Unknown Source"
+
+    @pytest.mark.parametrize("extra", [{"source_parameters": {"days": 1}}, {"source": ""}, {"source": "test", "source_parameters": [1]}])
+    def test_a_body_without_a_source_or_not_an_object_is_a_bad_request(self, running, extra):
+        request = {"timestamp": int(time.time()), "request_id": "abc", "required_protocol_version": 1, **extra}
+        nonce = os.urandom(12)
+        sealed = ChaCha20Poly1305(TRANSPORT_KEY).encrypt(nonce, json.dumps(request).encode(), retriever.request_associated_data("/retrieve"))
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            TestRefusals().send_unencrypted(running, "/retrieve", nonce + sealed)
+        assert (raised.value.code, raised.value.reason) == (400, "Bad Request")
 
 
 class TestAbandonedConnections:

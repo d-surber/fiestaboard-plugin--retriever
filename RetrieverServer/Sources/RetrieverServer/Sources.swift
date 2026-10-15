@@ -27,7 +27,7 @@ func connectModules(_ modules: [ModuleConfig.Module]) -> [Source] {
         let module = modules[position]
         do {
             let source = try RemoteSource(serviceName: module.identifier, cdhash: module.cdhash, name: module.name,
-                                          parameters: module.parameters ?? [:])
+                                          parameters: module.parameters ?? [:], requestable: Set(module.requestable ?? []))
             if let problem = source.parameterProblem {
                 log("Module config: the source \"\(source.name)\" (\(module.identifier)) \(problem). It reports that until the config is corrected.")
             }

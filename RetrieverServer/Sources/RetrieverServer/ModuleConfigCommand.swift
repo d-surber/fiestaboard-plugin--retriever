@@ -44,8 +44,9 @@ enum ModuleConfigCommand {
 
     // MARK: sign
 
-    /// `--days N`, `--pin`, `--replace-key`, `--name NAME` and any number
-    /// of `--set PARAMETER=VALUE`, and whatever else was given.
+    /// `--days N`, `--pin`, `--replace-key`, `--name NAME`, any number
+    /// of `--set PARAMETER=VALUE`, `--body PARAMETER,…`, and
+    /// whatever else was given.
     struct Options: Equatable {
         var days = Int(ModuleConfig.defaultValidity / 86400)
         var pin = false
@@ -54,6 +55,8 @@ enum ModuleConfigCommand {
         var sourceName: String?
         /// What the module is to be asked, from each `--set`.
         var parameters: SourceParameters = [:]
+        /// The parameters a request's body may set, from `--body`.
+        var requestable: [String] = []
         var names: [String] = []
 
         init(_ arguments: [String]) throws {
@@ -74,7 +77,17 @@ enum ModuleConfigCommand {
                     guard let setting = rest.popFirst(), let equals = setting.firstIndex(of: "="), equals != setting.startIndex else {
                         throw Problem("--set needs a parameter and its value, as in: --set days_from_today=1")
                     }
-                    parameters[String(setting[..<equals])] = ModuleConfigCommand.parameterValue(String(setting[setting.index(after: equals)...]))
+                    let name = String(setting[..<equals])
+                    do {
+                        parameters[name] = try ModuleConfigCommand.parameterValue(String(setting[setting.index(after: equals)...]))
+                    } catch let problem as Problem {
+                        throw Problem("--set \(name): \(problem)")
+                    }
+                case "--body":
+                    guard let list = rest.popFirst() else {
+                        throw Problem("--body needs the parameters a request's body may set, as in: --body days_from_today,calendars")
+                    }
+                    requestable += list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 default:
                     names.append(argument)
                 }
@@ -82,15 +95,26 @@ enum ModuleConfigCommand {
         }
     }
 
-    /// A parameter's value as typed on a command line: a whole number, a
-    /// number, `true` or `false` if it reads as one, and otherwise text.
-    /// Quotes around it make it text whatever it reads as.
-    static func parameterValue(_ written: String) -> JSON {
+    /// A parameter's value as typed on a command line, read as the plugin
+    /// reads a value in a request's body: a whole number, a number, `true`
+    /// or `false` if it reads as one, and otherwise text. Quotes around it
+    /// make it text whatever it reads as. Only single values: one that
+    /// begins with { or [ is refused unless quoted. A formula, {{= ... }},
+    /// is refused, quoted or not: only the plugin works one out, and the
+    /// config is signed once and asks the same thing every time.
+    static func parameterValue(_ written: String) throws -> JSON {
+        if written.contains("{{") || written.contains("}}") {
+            throw Problem("a formula, {{= ... }}, can be worked out only in a request's body, which the plugin sends; let the body set this parameter with --body")
+        }
         if written.count >= 2, written.hasPrefix("\""), written.hasSuffix("\"") { return .string(String(written.dropFirst().dropLast())) }
+        if written.hasPrefix("{") || written.hasPrefix("[") {
+            throw Problem("only single values can be set, not objects or arrays; put text that begins with { or [ in quotes")
+        }
         if written == "true" { return .bool(true) }
         if written == "false" { return .bool(false) }
-        if let whole = Int(written) { return .int(whole) }
-        if let number = Double(written), number.isFinite { return .double(number) }
+        if written.wholeMatch(of: #/[+-]?[0-9]+/#) != nil, let whole = Int(written) { return .int(whole) }
+        if written.wholeMatch(of: #/[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/#) != nil,
+           let number = Double(written), number.isFinite { return .double(number) }
         return .string(written)
     }
 
@@ -132,8 +156,8 @@ enum ModuleConfigCommand {
     static func add(_ arguments: [String]) throws {
         let options = try Options(arguments)
         guard !options.names.isEmpty else { throw Problem("Name the module to allow: its program, or its identifier.") }
-        guard options.names.count == 1 || (options.sourceName == nil && options.parameters.isEmpty) else {
-            throw Problem("--name and --set say how one module is to be listed; name one module at a time with them.")
+        guard options.names.count == 1 || (options.sourceName == nil && options.parameters.isEmpty && options.requestable.isEmpty) else {
+            throw Problem("--name, --set and --body say how one module is to be listed; name one module at a time with them.")
         }
         let installed = Installation.modules(in: Installation.programs).accepted
         var added: [ModuleConfig.Module] = []
@@ -150,7 +174,8 @@ enum ModuleConfigCommand {
                 throw Problem("Not added: \(module.path) is signed as \"\(module.identifier)\", which is not a module.")
             }
             let entry = ModuleConfig.Module(identifier: module.identifier, cdhash: options.pin ? module.cdhash : nil,
-                                            name: options.sourceName, parameters: options.parameters.isEmpty ? nil : options.parameters)
+                                            name: options.sourceName, parameters: options.parameters.isEmpty ? nil : options.parameters,
+                                            requestable: options.requestable.isEmpty ? nil : options.requestable)
             if let problem = ModuleConfigStore.problem(with: entry) { throw Problem("Not added: \(problem).") }
             try askModuleAboutParameters(of: entry)
             added.append(entry)
@@ -164,8 +189,9 @@ enum ModuleConfigCommand {
     /// and a module that cannot be asked now is left to it.
     /// - Throws: `Problem` if the module answers that it will not take them.
     static func askModuleAboutParameters(of entry: ModuleConfig.Module) throws {
-        guard let parameters = entry.parameters else { return }
-        guard let source = try? RemoteSource(serviceName: entry.identifier, cdhash: entry.cdhash, name: entry.name, parameters: parameters) else {
+        guard entry.parameters != nil || entry.requestable != nil else { return }
+        guard let source = try? RemoteSource(serviceName: entry.identifier, cdhash: entry.cdhash, name: entry.name,
+                                             parameters: entry.parameters ?? [:], requestable: Set(entry.requestable ?? [])) else {
             print("\(entry.identifier) is not running here to be asked about its parameters; the server will ask it when it starts.")
             return
         }
@@ -331,15 +357,17 @@ enum ModuleConfigCommand {
         }
     }
 
-    /// What an entry asks of its module, for a person to read; "" if nothing.
+    /// What an entry asks of its module, and what a request's body may set, for a
+    /// person to read; "" if nothing.
     static func asked(of module: ModuleConfig.Module) -> String {
-        guard let parameters = module.parameters, !parameters.isEmpty else { return "" }
+        let requestable = (module.requestable ?? []).isEmpty ? "" : ", the body may set " + module.requestable!.joined(separator: " ")
+        guard let parameters = module.parameters, !parameters.isEmpty else { return requestable }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
         let settings = parameters.sorted { $0.key < $1.key }.map { name, value in
             "\(name)=" + ((try? encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "?")
         }
-        return ", asked " + settings.joined(separator: " ")
+        return ", asked " + settings.joined(separator: " ") + requestable
     }
 
     // MARK: status

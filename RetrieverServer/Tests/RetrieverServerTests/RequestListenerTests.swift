@@ -85,8 +85,8 @@ private func httpRequest(_ line: String, body: Data = Data()) -> Data {
     Data("\(line)\r\nContent-Length: \(body.count)\r\n\r\n".utf8) + body
 }
 
-private func sealedRequest(path: String, timestamp: Date = Date(), id: String = "abc123") throws -> Data {
-    let plaintext = Data(#"{"timestamp": \#(Int(timestamp.timeIntervalSince1970)), "request_id": "\#(id)"}"#.utf8)
+private func sealedRequest(path: String, timestamp: Date = Date(), id: String = "abc123", extra: String = "") throws -> Data {
+    let plaintext = Data(#"{"timestamp": \#(Int(timestamp.timeIntervalSince1970)), "request_id": "\#(id)"\#(extra)}"#.utf8)
     return try ChaChaPoly.seal(plaintext, using: transportKey, authenticating: Wire.requestAuthenticatedData(path)).combined
 }
 
@@ -112,6 +112,41 @@ private func parts(of response: Data) throws -> (status: String, body: Data) {
         let answer = try JSONDecoder().decode(Wire.Response<JSON>.self, from: plaintext)
         #expect(answer.id == "abc123")
         #expect(answer.configFingerprint == running.queue.sync { running.state.sourceConfig.fingerprint })
+    }
+
+    @Test func aRetrieveThatNamesASourceIsAnsweredWithThatSourceAlone() throws {
+        let running = try RunningListener()
+        let client = try ClientConnection(port: running.port)
+        let name = vectorSources[0].name
+        client.send(httpRequest("POST /retrieve HTTP/1.1", body: try sealedRequest(path: Wire.retrievePath, extra: #", "source": "\#(name)""#)))
+        guard case .answered(let response) = client.outcome(within: 5) else { Issue.record("no answer"); return }
+        let (status, body) = try parts(of: response)
+        #expect(status == "HTTP/1.1 200 OK")
+        let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: body), using: transportKey,
+                                            authenticating: Wire.responseAuthenticatedData(Wire.retrievePath))
+        let answer = try JSONDecoder().decode(Wire.Response<[String: Entry]>.self, from: plaintext)
+        #expect(Array(answer.data.keys) == [name])
+    }
+
+    @Test func aBodyThatSetsWhatItMayNotIsAnsweredWithTheSourcesErrorAndTheSourceIsNotAsked() throws {
+        let running = try RunningListener()
+        let client = try ClientConnection(port: running.port)
+        let name = vectorSources[0].name
+        let extra = #", "source": "\#(name)", "source_parameters": {"count": 5}"#
+        client.send(httpRequest("POST /retrieve HTTP/1.1", body: try sealedRequest(path: Wire.retrievePath, extra: extra)))
+        guard case .answered(let response) = client.outcome(within: 5) else { Issue.record("no answer"); return }
+        let plaintext = try ChaChaPoly.open(ChaChaPoly.SealedBox(combined: try parts(of: response).body), using: transportKey,
+                                            authenticating: Wire.responseAuthenticatedData(Wire.retrievePath))
+        let answer = try JSONDecoder().decode(Wire.Response<[String: Entry]>.self, from: plaintext)
+        #expect(answer.data == [name: vectorSources[0].failed("a request may not set \"count\"")])
+    }
+
+    @Test func aRetrieveThatNamesASourceNotServedIsToldSo() throws {
+        let running = try RunningListener()
+        let client = try ClientConnection(port: running.port)
+        client.send(httpRequest("POST /retrieve HTTP/1.1", body: try sealedRequest(path: Wire.retrievePath, extra: #", "source": "nowhere""#)))
+        guard case .answered(let response) = client.outcome(within: 5) else { Issue.record("no answer"); return }
+        #expect(try parts(of: response).status == "HTTP/1.1 400 Unknown Source")
     }
 
     @Test func aRequestThatDecryptsButIsRefusedIsToldWhy() throws {

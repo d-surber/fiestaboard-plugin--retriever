@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import RetrieverSourceKit
 
 // Wire protocol, version 1.
 //
@@ -9,7 +10,9 @@ import Foundation
 // random bytes shared with the plugin.
 //
 //   request plaintext:   {"timestamp": <seconds since 1970>, "request_id": "<random>",
-//                         "required_protocol_version": <number, optional>}
+//                         "required_protocol_version": <number, optional>,
+//                         "source": "<name>", optional, /retrieve only,
+//                         "source_parameters": {"<parameter>": <value>, …}, optional, needs "source"}
 //   response plaintext:  {"request_id": "<echoed>", "config_fingerprint": <number>, "data": …}
 //
 //   /server data:    {"name", "version", "supported_protocol_version_range": {"min", "max"}, …}
@@ -20,6 +23,12 @@ import Foundation
 // client picks one and names it in its /config and /retrieve requests; a
 // request that names none is taken to be protocol 1. /server itself takes
 // no protocol: it has to be answerable before one is chosen.
+//
+// A /retrieve that names a source asks only that source, and answers with
+// its entry alone; a name the server does not serve gets 400 Unknown
+// Source. Its `source_parameters` replace what the module config asks of
+// the source, but only those the config's entry lets a request set: any
+// other, and the source's `error` says so and it is not asked.
 //
 // Each source has its own `error`, empty when there was no problem getting
 // its value. `config_fingerprint` identifies the config; when it differs from the one the
@@ -65,6 +74,7 @@ enum Wire {
         case malformed         // authentic, but not a request
         case stale             // authentic, but its timestamp is too far from now
         case unsupportedProtocol   // authentic, but asks for a protocol outside `protocolVersions`
+        case unknownSource         // authentic, but names a source not served
 
         /// The status to answer with, or nil to close the connection
         /// without answering. Only a request that decrypted is told anything.
@@ -75,6 +85,7 @@ enum Wire {
             // Said distinctly so that clock skew is not mistaken for a wrong key.
             case .stale: return "400 Stale Timestamp"
             case .unsupportedProtocol: return "400 Unsupported Protocol"
+            case .unknownSource: return "400 Unknown Source"
             }
         }
     }
@@ -84,16 +95,23 @@ enum Wire {
         let timestamp: Int   // seconds since 1970, by the sender's clock
         let id: String
         var protocolVersion: Int?
+        var source: String?
+        var parameters: SourceParameters?
 
         enum CodingKeys: String, CodingKey {
             case timestamp, id = "request_id", protocolVersion = "required_protocol_version"
+            case source, parameters = "source_parameters"
         }
     }
 
-    /// A request that was accepted: the ID to echo and the protocol version to answer in.
+    /// A request that was accepted: the ID to echo, the protocol version to
+    /// answer in, and for /retrieve the one source to ask, if it names one,
+    /// with what to ask it.
     struct Accepted: Equatable {
         let id: String
         let protocolVersion: Int
+        var source: String? = nil
+        var parameters: SourceParameters = [:]
     }
 
     /// A response's plaintext.
@@ -119,13 +137,16 @@ enum Wire {
               let plain = try? ChaChaPoly.open(box, using: key, authenticating: requestAuthenticatedData(path))
         else { throw Failure.unauthenticated }
         guard let request = try? JSONDecoder().decode(Request.self, from: plain),
-              !request.id.isEmpty, request.id.count <= maxRequestIDLength
+              !request.id.isEmpty, request.id.count <= maxRequestIDLength,
+              request.source.map({ !$0.isEmpty }) ?? true,
+              request.source != nil || (request.parameters ?? [:]).isEmpty
         else { throw Failure.malformed }
         guard abs(now.timeIntervalSince1970 - Double(request.timestamp)) <= maxClockDifference else { throw Failure.stale }
         if path == serverInfoPath { return Accepted(id: request.id, protocolVersion: defaultProtocolVersion) }
         let requested = request.protocolVersion ?? defaultProtocolVersion
         guard protocolVersions.contains(requested) else { throw Failure.unsupportedProtocol }
-        return Accepted(id: request.id, protocolVersion: requested)
+        guard path == retrievePath else { return Accepted(id: request.id, protocolVersion: requested) }
+        return Accepted(id: request.id, protocolVersion: requested, source: request.source, parameters: request.parameters ?? [:])
     }
 
     /// Seals a response for one endpoint.

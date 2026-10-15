@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, NamedTuple
 
 from cryptography.exceptions import InvalidTag
@@ -144,7 +144,12 @@ def decode_transport_key(encoded_key: Any) -> bytes | None:
 
 
 def encrypt_request(
-    transport_key: bytes, current_time: float, endpoint_path: str, protocol_version: int | None = None
+    transport_key: bytes,
+    current_time: float,
+    endpoint_path: str,
+    protocol_version: int | None = None,
+    source: str | None = None,
+    source_parameters: dict[str, Any] | None = None,
 ) -> tuple[bytes, str]:
     """
     Build the encrypted body of one request.
@@ -154,14 +159,21 @@ def encrypt_request(
             time is more than a minute from its own.
         protocol_version: Named in the request unless None; a /server request
             names none.
+        source: For /retrieve, the one source to ask; None for all.
+        source_parameters: For /retrieve, what to ask that source in place of
+            what the server's config asks; see "What a retrieve asks".
 
     Returns:
         The body, and the random ID in it that the response must echo.
     """
     request_id = secrets.token_hex(16)
-    request = {"timestamp": int(current_time), "request_id": request_id}
+    request: dict[str, Any] = {"timestamp": int(current_time), "request_id": request_id}
     if protocol_version is not None:
         request["required_protocol_version"] = protocol_version
+    if source:
+        request["source"] = source
+        if source_parameters:
+            request["source_parameters"] = source_parameters
     plaintext = json.dumps(request).encode()
     nonce = os.urandom(NONCE_LENGTH_BYTES)
     ciphertext = ChaCha20Poly1305(transport_key).encrypt(nonce, plaintext, request_associated_data(endpoint_path))
@@ -235,6 +247,172 @@ def choose_protocol_version(server_info: dict[str, Any]) -> int:
     if not in_common:
         raise ValueError("no common protocol")
     return max(in_common)
+
+
+# --- What a retrieve asks ----------------------------------------------------
+#
+# An instance may ask one source instead of all of them, and then may set
+# some of what that source is asked: the parameters its entry in the
+# server's signed module config lets a request's body set, and no others.
+# The server checks that, and says in the source's error if a body sets
+# anything else. Two different questions to one source are two instances.
+#
+# The body is one parameter to a line, "name: value":
+#
+#   calendars: Personal,Travel
+#   days_from_today: 1
+#   on: {{=FORMATDATE(DATEADD(TODAY(), 1, "days"), "YYYY-MM-DD")}}
+#
+# A value is
+#   - a formula alone, {{= ... }}: its result, keeping its type, a date as
+#     ISO 8601 text;
+#   - otherwise in double quotes: the text inside, whatever it reads as;
+#   - otherwise a number, or true or false, if it reads as one;
+#   - otherwise text.
+# Formulas inside text, and inside quotes, are replaced by their results as
+# text. They are worked out at every fetch by FiestaBoard's engine and read
+# only the clock, through NOW() and TODAY(); there is nothing else for them
+# to read. Only single values are sent: a value that begins with { or [ is
+# refused, rather than sent as text, so that it cannot change meaning if
+# objects and arrays are ever sent. Blank lines and lines beginning with #
+# are skipped.
+
+_BODY_LINE_PATTERN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*)$")
+# FiestaBoard's own pattern for an inline formula: no braces inside one.
+_INLINE_FORMULA_PATTERN = re.compile(r"\{\{=([^}{]*)\}\}")
+_WHOLE_NUMBER_PATTERN = re.compile(r"^[+-]?[0-9]+$")
+_NUMBER_PATTERN = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+
+
+class _BodyValueError(Exception):
+    """Why a value in the body cannot be sent."""
+
+
+def work_out_body(body_text: Any) -> tuple[dict[str, Any], list[str]]:
+    """
+    Work out the parameters a request body sets, formulas and all.
+
+    Returns:
+        The parameters by name, and a message for each line that cannot be
+        sent; any message means nothing should be sent. Never raises.
+    """
+    if not isinstance(body_text, str):
+        return {}, [] if body_text is None else ["Request body must be text"]
+    parameters: dict[str, Any] = {}
+    errors = []
+    for line_number, line in enumerate(body_text.splitlines(), start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        label = f"Request body line {line_number}"
+        written = _BODY_LINE_PATTERN.match(line)
+        if not written:
+            errors.append(f"{label}: write a parameter as name: value")
+            continue
+        name, value_text = written.group(1), written.group(2).strip()
+        if name in parameters:
+            errors.append(f"{label}: {name} is set twice")
+            continue
+        try:
+            parameters[name] = body_value(value_text)
+        except _BodyValueError as error:
+            errors.append(f"{label} ({name}): {error}")
+            parameters[name] = None
+    return ({} if errors else parameters), errors
+
+
+def body_value(value_text: str) -> Any:
+    """
+    The value one line of the body gives; see "What a retrieve asks".
+
+    Raises:
+        _BodyValueError: The value cannot be sent; the message says why.
+    """
+    unclosed = _INLINE_FORMULA_PATTERN.sub("", value_text)
+    if "{{" in unclosed or "}}" in unclosed:
+        raise _BodyValueError("{{ }} may hold only a formula, as {{= ... }}, with no { or } inside it")
+    if value_text.startswith(("{", "[")) and not value_text.startswith("{{="):
+        raise _BodyValueError("only single values can be sent, not objects or arrays; put text that begins with { or [ in quotes")
+
+    only_formula = _INLINE_FORMULA_PATTERN.fullmatch(value_text)
+    if only_formula and evaluate_value is not None:
+        return _typed_formula_result(only_formula.group(1).strip())
+    if len(value_text) >= 2 and value_text.startswith('"') and value_text.endswith('"'):
+        return _with_formulas_as_text(value_text[1:-1])
+    if only_formula:
+        # An engine that only renders text: the result is read as if typed.
+        return _literal_value(_with_formulas_as_text(value_text))
+    if _INLINE_FORMULA_PATTERN.search(value_text):
+        return _with_formulas_as_text(value_text)
+    return _literal_value(value_text)
+
+
+def _literal_value(written: str) -> Any:
+    """A number, true or false if the text reads as one, and otherwise the text."""
+    if written in ("true", "false"):
+        return written == "true"
+    if _WHOLE_NUMBER_PATTERN.match(written):
+        return int(written)
+    if _NUMBER_PATTERN.match(written):
+        number = float(written)
+        if math.isfinite(number):
+            return number
+    return written
+
+
+def _checked_formula(formula: str) -> str:
+    """The formula, once the engine finds nothing wrong with how it is written."""
+    if not formula:
+        raise _BodyValueError("{{= }} holds no formula")
+    try:
+        issues = validate_expression(formula)
+    except Exception as error:
+        raise _BodyValueError(f"the formula could not be checked ({type(error).__name__})") from None
+    if issues:
+        raise _BodyValueError(issues[0].message)
+    return formula
+
+
+def _typed_formula_result(formula: str) -> Any:
+    """A formula's result as it is to be sent, keeping its type."""
+    try:
+        result = evaluate_value(_checked_formula(formula), {})
+    except _BodyValueError:
+        raise
+    except Exception:
+        result = ErrorValue("#VALUE")
+    if isinstance(result, ErrorValue):
+        raise _BodyValueError(f"the formula gives {result.code}")
+    if result is None:
+        raise _BodyValueError("the formula gives nothing")
+    if isinstance(result, (bool, int, str)):
+        return result
+    if isinstance(result, float):
+        if not math.isfinite(result):
+            raise _BodyValueError("the formula gives a number that is not one")
+        # The engine counts in floats.
+        return int(result) if result.is_integer() else result
+    if isinstance(result, datetime):
+        return result.isoformat(timespec="seconds")
+    if isinstance(result, date):
+        return result.isoformat()
+    raise _BodyValueError("the formula gives a list or an object; only single values can be sent")
+
+
+def _with_formulas_as_text(text: str) -> str:
+    """The text with each formula in it replaced by its result as the engine renders it."""
+
+    def result_as_text(formula: re.Match[str]) -> str:
+        try:
+            rendered = evaluate(_checked_formula(formula.group(1).strip()), {})
+        except _BodyValueError:
+            raise
+        except Exception:
+            rendered = "#VALUE"
+        if _FORMULA_ERROR_CODE_PATTERN.match(rendered):
+            raise _BodyValueError(f"a formula gives {rendered}")
+        return rendered
+
+    return _INLINE_FORMULA_PATTERN.sub(result_as_text, text)
 
 
 # --- Values the user defines -------------------------------------------------
@@ -1094,15 +1272,19 @@ class RetrieverPlugin(PluginBase):
                 return self._failed_fetch_result(server_url, f"{failure_reason(error)}; {CONFIG_PENDING_SUFFIX}", {})
 
         known = self._server_self_description
+        source, source_parameters, body_errors = self._what_to_ask(self.config)
         try:
+            if body_errors:
+                raise ValueError(body_errors[0])
             config_fingerprint, server_values = self._send_encrypted_request(
-                server_url, RETRIEVE_PATH, transport_key, deadline, known.protocol_version
+                server_url, RETRIEVE_PATH, transport_key, deadline, known.protocol_version, source, source_parameters
             )
             reject_reserved_source_names(server_values)
         except Exception as error:
             defaults = {
-                source: {"error": "", "data": default_value_for_schema(schema)}
-                for source, schema in known.source_schemas.items()
+                name: {"error": "", "data": default_value_for_schema(schema)}
+                for name, schema in known.source_schemas.items()
+                if source is None or name == source
             }
             return self._failed_fetch_result(
                 server_url, failure_reason(error), {**defaults, "server": known.server_info}
@@ -1199,11 +1381,14 @@ class RetrieverPlugin(PluginBase):
         server_url = config["server_url"].strip().rstrip("/")
         transport_key = decode_transport_key(stored_transport_key(config))
         deadline = time.monotonic() + FETCH_TIME_LIMIT_SECONDS
+        source, source_parameters, body_errors = self._what_to_ask(config)
+        if body_errors:
+            raise PreviewUnavailable(body_errors[0])
         try:
             _, server_info = self._send_encrypted_request(server_url, SERVER_INFO_PATH, transport_key, deadline)
             protocol_version = choose_protocol_version(server_info)
             _, server_values = self._send_encrypted_request(
-                server_url, RETRIEVE_PATH, transport_key, deadline, protocol_version
+                server_url, RETRIEVE_PATH, transport_key, deadline, protocol_version, source, source_parameters
             )
             reject_reserved_source_names(server_values)
         except Exception as error:
@@ -1217,6 +1402,8 @@ class RetrieverPlugin(PluginBase):
         transport_key: bytes,
         deadline: float,
         protocol_version: int | None = None,
+        source: str | None = None,
+        source_parameters: dict[str, Any] | None = None,
     ) -> tuple[int, dict[str, Any]]:
         """
         Make one request to the server. The only place that talks to it.
@@ -1225,6 +1412,8 @@ class RetrieverPlugin(PluginBase):
             deadline: The time.monotonic() value by which the server must have
                 answered.
             protocol_version: Named in the request unless None.
+            source, source_parameters: For /retrieve, what to ask; see
+                encrypt_request.
 
         Returns:
             The config fingerprint and the data in the server's answer.
@@ -1240,7 +1429,9 @@ class RetrieverPlugin(PluginBase):
         seconds_left = deadline - time.monotonic()
         if seconds_left <= 0:
             raise TimeoutError
-        body, request_id = encrypt_request(transport_key, time.time(), endpoint_path, protocol_version)
+        body, request_id = encrypt_request(
+            transport_key, time.time(), endpoint_path, protocol_version, source, source_parameters
+        )
         # The scheme is restricted to http(s) by validate_config.
         request = urllib.request.Request(  # noqa: S310
             server_url + endpoint_path,
@@ -1256,7 +1447,9 @@ class RetrieverPlugin(PluginBase):
         Validate plugin configuration, when the settings are saved.
 
         Asks the server what it sends if any row adds a field to an object,
-        since only the server can say whether such a row fits.
+        since only the server can say whether such a row fits, and whether it
+        serves the one source the settings name. The body's formulas are
+        worked out, to find any that fail.
 
         Returns:
             List of error messages (empty if valid)
@@ -1265,7 +1458,28 @@ class RetrieverPlugin(PluginBase):
         value_rows = config.get("values")
         if not errors and rows_adding_to_objects(value_rows):
             errors += self._shape_errors(config, value_rows)
-        return errors + value_row_errors(value_rows)
+        source, _, body_errors = self._what_to_ask(config)
+        if not errors and source:
+            errors += self._source_errors(config, source)
+        return errors + body_errors + value_row_errors(value_rows)
+
+    def _source_errors(self, config: dict[str, Any], source: str) -> list[str]:
+        """
+        Whether the server serves the one source the settings name. A server
+        that does not answer is not held against the settings: the fetch
+        will say so.
+        """
+        server_url = config["server_url"].strip().rstrip("/")
+        transport_key = decode_transport_key(stored_transport_key(config))
+        deadline = time.monotonic() + FETCH_TIME_LIMIT_SECONDS
+        try:
+            server = self._read_server_self_description(server_url, transport_key, deadline)
+        except Exception:
+            return []
+        if source in server.source_schemas:
+            return []
+        served = ", ".join(sorted(server.source_schemas)) or "none"
+        return [f"The server serves no source named {source} (it serves: {served})"]
 
     def _shape_errors(self, config: dict[str, Any], value_rows: Any) -> list[str]:
         """
@@ -1317,3 +1531,20 @@ class RetrieverPlugin(PluginBase):
             errors.append("API key must be the base64 of 32 bytes")
 
         return errors
+
+    @staticmethod
+    def _what_to_ask(config: dict[str, Any]) -> tuple[str | None, dict[str, Any], list[str]]:
+        """
+        What a retrieve with these settings asks: the one source, or None for
+        all, and the parameters its body sets, worked out now.
+
+        Returns:
+            The source, the parameters, and a message for each thing wrong;
+            any message means nothing should be asked. Never raises.
+        """
+        source = config.get("source")
+        source = source.strip() if isinstance(source, str) else ""
+        parameters, errors = work_out_body(config.get("body"))
+        if (parameters or errors) and not source:
+            errors = [*errors, "A request body needs a source to ask"]
+        return source or None, parameters, errors

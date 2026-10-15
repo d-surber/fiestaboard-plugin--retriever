@@ -31,6 +31,8 @@ struct ModuleConfig: Codable, Equatable {
         var name: String?
         /// What the module is asked on every fetch; nil for nothing.
         var parameters: SourceParameters?
+        /// The parameters a request may set in place of these; nil for none.
+        var requestable: [String]?
 
         /// The name the source is served under.
         var sourceName: String { name ?? String(identifier.dropFirst(Signer.moduleIdentifierPrefix.count)) }
@@ -170,6 +172,9 @@ enum ModuleConfigStore {
         }
         guard !ModuleConfig.reservedSourceNames.contains(module.sourceName) else {
             return "module config lists \(module.identifier) as the source \"\(module.sourceName)\", a name that is already taken"
+        }
+        if let requestable = module.requestable, requestable.contains(where: \.isEmpty) || Set(requestable).count != requestable.count {
+            return "module config lets a request set the parameters of \"\(module.sourceName)\" with a name that is empty or given twice"
         }
         if let cdhash = module.cdhash, !Signer.isCodeHash(cdhash) {
             return "module config pins \(module.identifier) to \"\(cdhash)\", which is not a code hash"
