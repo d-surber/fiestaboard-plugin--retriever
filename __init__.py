@@ -36,9 +36,9 @@ except ImportError:  # a FiestaBoard without the plugin-supplied preview
 
 
 try:
-    from src.templates.expressions import ErrorValue, evaluate_value
+    from src.templates.expressions import ErrorValue, FormulaError, evaluate_value
 except ImportError:  # a FiestaBoard whose formula engine only renders its results as text
-    ErrorValue = evaluate_value = None
+    ErrorValue = FormulaError = evaluate_value = None
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +378,8 @@ def _typed_formula_result(formula: str) -> Any:
         result = evaluate_value(_checked_formula(formula), {})
     except _BodyValueError:
         raise
+    except FormulaError as error:  # FiestaBoard 10 raises an error, 9.14.0 as patched returned it
+        result = ErrorValue(error.code)
     except Exception:
         result = ErrorValue("#VALUE")
     if isinstance(result, ErrorValue):
@@ -675,6 +677,8 @@ def _evaluate_with_type(formula: str, formula_context: dict[str, Any], default_v
     """
     try:
         result = evaluate_value(formula, formula_context)
+    except FormulaError as error:  # FiestaBoard 10 raises an error, 9.14.0 as patched returned it
+        result = ErrorValue(error.code)
     except Exception:
         result = ErrorValue("#VALUE")
     if isinstance(result, ErrorValue):
