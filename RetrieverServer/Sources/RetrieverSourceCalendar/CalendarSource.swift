@@ -10,6 +10,9 @@ import RetrieverSourceKit
 ///
 /// A calendar is named as the Calendar app shows it, and the name stands for
 /// every calendar so called, whichever account it is in.
+///
+/// A request may also leave out the events that started some while ago,
+/// so that a board shows what is on now and next and not what is over.
 final class CalendarSource: Source {
     /// One event. Times are moments, not text laid out for a display.
     struct Event: Codable, Equatable {
@@ -78,6 +81,10 @@ final class CalendarSource: Source {
                 "type": "string", "default": "",
                 "description": "Every calendar but these, named the same way. Not together with calendars.",
             ],
+            "started_after": [
+                "type": "string", "format": "date-time", "requestOnly": true,
+                "description": "Leave out events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
+            ],
         ],
     ]
 
@@ -95,14 +102,40 @@ final class CalendarSource: Source {
         case missing([String])
     }
 
+    /// What one fetch is asked for.
+    struct Asked: Equatable {
+        let wanted: Wanted
+        let daysFromToday: Int
+        /// The moment before which a timed event that started is left out; nil to leave none out.
+        let startedAfter: Date?
+    }
+
     /// What a set of parameters asks for, with the defaults for what it leaves out.
-    static func asked(by parameters: SourceParameters) -> (wanted: Wanted, daysFromToday: Int) {
-        var only: [String] = [], allBut: [String] = [], daysFromToday = 0
+    static func asked(by parameters: SourceParameters) -> Asked {
+        var only: [String] = [], allBut: [String] = [], daysFromToday = 0, startedAfter: Date?
         if case .string(let list)? = parameters["calendars"] { only = names(in: list) }
         if case .string(let list)? = parameters["except"] { allBut = names(in: list) }
         if case .int(let days)? = parameters["days_from_today"] { daysFromToday = days }
+        if case .string(let text)? = parameters["started_after"] { startedAfter = moment(from: text) }
         // Both lists at once does not pass `problem(with:)`.
-        return (!only.isEmpty ? .only(only) : !allBut.isEmpty ? .allBut(allBut) : .every, daysFromToday)
+        return Asked(wanted: !only.isEmpty ? .only(only) : !allBut.isEmpty ? .allBut(allBut) : .every,
+                     daysFromToday: daysFromToday, startedAfter: startedAfter)
+    }
+
+    /// A moment written as in RFC 3339, "2026-11-13T09:15:00-08:00" or
+    /// "...Z"; nil without its offset from UTC, which would leave the moment
+    /// to be guessed from this Mac's time zone.
+    static func moment(from text: String) -> Date? {
+        ISO8601DateFormatter().date(from: text)
+    }
+
+    /// The events left once those that started before `startedAfter` are
+    /// left out. One that started at that moment stays, and so does every
+    /// all-day event, which starts at midnight but is not over until the
+    /// day is.
+    static func events(_ events: [Event], startedAfter: Date?) -> [Event] {
+        guard let startedAfter else { return events }
+        return events.filter { $0.all_day || $0.start >= startedAfter }
     }
 
     /// The names in a list written with commas between them: without the
@@ -144,7 +177,11 @@ final class CalendarSource: Source {
             if Self.names(in: list).isEmpty { return "the parameter \"\(parameter)\" names no calendar" }
             listed.append(parameter)
         }
-        return listed.count > 1 ? "give \"calendars\" or \"except\", not both" : nil
+        if listed.count > 1 { return "give \"calendars\" or \"except\", not both" }
+        if case .string(let text)? = parameters["started_after"], Self.moment(from: text) == nil {
+            return "the parameter \"started_after\" must be a moment with its offset from UTC, as 2026-11-13T09:15:00-08:00, not \"\(text)\""
+        }
+        return nil
     }
 
     /// The day that is `daysFromToday` after the day `now` falls in, from its
@@ -176,7 +213,7 @@ final class CalendarSource: Source {
     }
 
     /// Reads one day's events, access having been granted.
-    private func read(_ asked: (wanted: Wanted, daysFromToday: Int)) -> Entry {
+    private func read(_ asked: Asked) -> Entry {
         let calendar = Calendar.current
         guard let day = Self.day(asked.daysFromToday, from: Date(), in: calendar) else { return failed("that day cannot be reckoned") }
         store.refreshSourcesIfNecessary()
@@ -196,8 +233,9 @@ final class CalendarSource: Source {
         }
 
         let onThatDay = store.predicateForEvents(withStart: day.start, end: day.end, calendars: calendars)
-        let events = store.events(matching: onThatDay)
+        let allThatDay = store.events(matching: onThatDay)
             .map { Event(title: $0.title ?? "", calendar: $0.calendar.title, start: $0.startDate, end: $0.endDate, all_day: $0.isAllDay, location: $0.location ?? "") }
+        let events = Self.events(allThatDay, startedAfter: asked.startedAfter)
             .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
         log(.debug, "Fetched \(events.count) events for \(Self.dateText(of: day.start, in: calendar))")
         return succeeded(Payload(date: Self.dateText(of: day.start, in: calendar), events: events))

@@ -17,7 +17,10 @@ private struct AskedSource: Source {
     let schema: JSON = ["type": "object", "default": [:]]
     let parametersSchema: JSON = [
         "type": "object",
-        "properties": ["what": ["type": "string"], "how_many": ["type": "integer", "minimum": 0, "maximum": 9]],
+        "properties": [
+            "what": ["type": "string"], "how_many": ["type": "integer", "minimum": 0, "maximum": 9],
+            "when": ["type": "string", "requestOnly": true],
+        ],
     ]
     func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) { done(Entry(error: "", data: .object(parameters))) }
 }
@@ -56,7 +59,7 @@ private let serviceName = Signer.moduleIdentifier(for: "asked")
 @Test(arguments: [
     (["what": "x", "how_many": 3] as SourceParameters, nil as String?),
     ([:], nil),
-    (["which": "x"], "takes no parameter named \"which\" (it takes: how_many, what)"),
+    (["which": "x"], "takes no parameter named \"which\" (it takes: how_many, what, when)"),
     (["what": 3], "the parameter \"what\" must be text, not 3"),
     (["how_many": "3"], "the parameter \"how_many\" must be a whole number, not \"3\""),
     (["how_many": .double(1.5)], "the parameter \"how_many\" must be a whole number, not 1.5"),
@@ -82,11 +85,13 @@ func parametersAreCheckedAgainstWhatTheSourceDeclares(parameters: SourceParamete
             "zone": ["type": "string", "enum": ["north", "south"], "description": "Which half."],
             "limit": ["type": "integer", "minimum": 1, "maximum": 9, "default": 3],
             "label": ["type": "string"],
+            "now": ["type": "string", "requestOnly": true],
         ],
     ]
     #expect(ParametersSchema.summary(of: schema) == [
         "label: text",
         "limit: a whole number, at least 1, at most 9, 3 if left out",
+        "now: text, set only by a request",
         "zone: one of \"north\", \"south\", required. Which half.",
     ])
     #expect(ParametersSchema.summary(of: ["type": "object"]) == [])
@@ -142,6 +147,15 @@ func parametersAreCheckedAgainstWhatTheSourceDeclares(parameters: SourceParamete
         let remote = try RemoteSource(serviceName: serviceName, requestable: ["how_many", "colour"], connect: module.connect)
         #expect(remote.parameterProblem == "lets a request set \"colour\", which its module does not take")
         #expect(await fetched(remote, asking: ["how_many": 1]).error == "lets a request set \"colour\", which its module does not take")
+    }
+
+    @Test func anEntryCannotSetAParameterOnlyARequestMaySetButCanLetARequestSetIt() async throws {
+        let module = TestModule(AskedSource())
+        let setByEntry = try RemoteSource(serviceName: serviceName, parameters: ["when": "now"], connect: module.connect)
+        #expect(setByEntry.parameterProblem == "sets \"when\", which only a request may set; let the body set it with --body")
+        let setByRequest = try RemoteSource(serviceName: serviceName, requestable: ["when"], connect: module.connect)
+        #expect(setByRequest.parameterProblem == nil)
+        #expect(await fetched(setByRequest, asking: ["when": "now"]) == Entry(error: "", data: ["when": "now"]))
     }
 
     @Test func parametersTheModuleWillNotTakeAreFoundWhenTheSourceIsSetUpAndThenReportedByIt() async throws {

@@ -22,8 +22,9 @@ final class RemoteSource: Source {
     let parameters: SourceParameters
     /// The parameters a request may set in place of the entry's.
     let requestable: Set<String>
-    /// What the module found wrong with `parameters`, or a parameter in
-    /// `requestable` the module does not take, if anything. While
+    /// What the module found wrong with `parameters`, a parameter in
+    /// `requestable` the module does not take, or one in `parameters` that
+    /// only a request may set, if anything. While
     /// there is something, the module is not asked for data: the source
     /// reports this instead, so that the mistake shows wherever the source does.
     let parameterProblem: String?
@@ -92,7 +93,9 @@ final class RemoteSource: Source {
         }
         switch checked {
         case .success(let problem) where !problem.isEmpty: parameterProblem = problem
-        case .success: parameterProblem = Self.untaken(requestable, by: parametersSchema)
+        case .success:
+            parameterProblem = Self.untaken(requestable, by: parametersSchema)
+                ?? Self.setByEntry(parameters, though: ParametersSchema.requestOnly(in: parametersSchema))
         case .failure(let failure): throw failure
         }
     }
@@ -129,6 +132,14 @@ final class RemoteSource: Source {
         let untaken = requestable.subtracting(declared).sorted()
         guard !untaken.isEmpty else { return nil }
         return "lets a request set " + untaken.map { "\"\($0)\"" }.joined(separator: ", ") + ", which its module does not take"
+    }
+
+    /// Which of an entry's parameters its module leaves to a request
+    /// alone, as a problem with the entry; nil if it sets none of them.
+    static func setByEntry(_ parameters: SourceParameters, though requestOnly: Set<String>) -> String? {
+        let set = requestOnly.intersection(parameters.keys).sorted()
+        guard !set.isEmpty else { return nil }
+        return "sets " + set.map { "\"\($0)\"" }.joined(separator: ", ") + ", which only a request may set; let the body set it with --body"
     }
 
     private static func encoded(_ parameters: SourceParameters) -> Data {

@@ -31,6 +31,7 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> 
         "calendars: text, \"\" if left out. Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
         "days_from_today: a whole number, at least -3660, at most 3660, 0 if left out. 0 is today, 1 tomorrow, -1 yesterday.",
         "except: text, \"\" if left out. Every calendar but these, named the same way. Not together with calendars.",
+        "started_after: text, set only by a request. Leave out events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
     ])
 }
 
@@ -38,6 +39,7 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> 
     let asked = CalendarSource.asked(by: [:])
     #expect(asked.wanted == .every)
     #expect(asked.daysFromToday == 0)
+    #expect(asked.startedAfter == nil)
 }
 
 @Test func itIsAskedForCalendarsByNameAndADayByItsDistanceFromToday() {
@@ -103,8 +105,8 @@ private func chosen(_ wanted: CalendarSource.Wanted) -> String {
     (["days_from_today": .double(0.5)], "the parameter \"days_from_today\" must be a whole number, not 0.5"),
     (["days_from_today": 4000], "the parameter \"days_from_today\" must be at most 3660, not 4000"),
     (["calendars": 7], "the parameter \"calendars\" must be text, not 7"),
-    (["calendar": "Work"], "takes no parameter named \"calendar\" (it takes: calendars, days_from_today, except)"),
-    (["date": "2026-10-08"], "takes no parameter named \"date\" (it takes: calendars, days_from_today, except)"),
+    (["calendar": "Work"], "takes no parameter named \"calendar\" (it takes: calendars, days_from_today, except, started_after)"),
+    (["date": "2026-10-08"], "takes no parameter named \"date\" (it takes: calendars, days_from_today, except, started_after)"),
 ])
 func itsParametersAreChecked(parameters: SourceParameters, problem: String?) {
     #expect(CalendarSource().problem(with: parameters) == problem)
@@ -132,4 +134,46 @@ func aDayIsCountedFromToday(daysFromToday: Int, date: String) throws {
     let short = try #require(CalendarSource.day(1, from: moment(2026, 3, 7), in: losAngeles))
     #expect(short.duration == 23 * 3600)
     #expect(CalendarSource.dateText(of: short.start, in: losAngeles) == "2026-03-08")
+}
+
+@Test func aRequestCanSayWhenTheEventsItWantsStarted() {
+    // As the plugin sends it: an hour before 10:15 in Los Angeles.
+    let asked = CalendarSource.asked(by: ["started_after": "2026-11-13T09:15:00-08:00"])
+    #expect(asked.startedAfter == moment(2026, 11, 13, 9).addingTimeInterval(15 * 60))
+    #expect(CalendarSource.asked(by: ["started_after": "2026-11-13T17:15:00Z"]).startedAfter == asked.startedAfter)
+}
+
+@Test(arguments: [
+    ("2026-11-13T09:15:00-08:00", true),
+    ("2026-11-13T17:15:00Z", true),
+    ("2026-11-13T09:15:00", false),
+    ("2026-11-13", false),
+    ("an hour ago", false),
+])
+func whenTheEventsStartedIsAMomentWithItsOffsetFromUTC(text: String, taken: Bool) {
+    let problem = "the parameter \"started_after\" must be a moment with its offset from UTC, as 2026-11-13T09:15:00-08:00, not \"\(text)\""
+    #expect(CalendarSource().problem(with: ["started_after": .string(text)]) == (taken ? nil : problem))
+}
+
+@Test func onlyARequestMaySayWhenTheEventsStarted() {
+    #expect(ParametersSchema.requestOnly(in: CalendarSource().parametersSchema) == ["started_after"])
+}
+
+/// A timed event on 13 November 2026 in Los Angeles, from its hours there.
+private func timed(_ title: String, from startHour: Int, to endHour: Int) -> CalendarSource.Event {
+    CalendarSource.Event(title: title, calendar: "Home", start: moment(2026, 11, 13, startHour), end: moment(2026, 11, 13, endHour), all_day: false, location: "")
+}
+
+private let holiday = CalendarSource.Event(title: "Holiday", calendar: "Home", start: moment(2026, 11, 13, 0), end: moment(2026, 11, 14, 0), all_day: true, location: "")
+
+@Test func eventsThatStartedBeforeTheMomentAreLeftOutButAllDayEventsStay() {
+    let day = [holiday, timed("Breakfast", from: 7, to: 8), timed("Meeting", from: 9, to: 11), timed("Lunch", from: 12, to: 13)]
+    let titles = CalendarSource.events(day, startedAfter: moment(2026, 11, 13, 9)).map(\.title)
+    // Meeting started at the moment itself, and stays.
+    #expect(titles == ["Holiday", "Meeting", "Lunch"])
+}
+
+@Test func withNoMomentNoEventIsLeftOut() {
+    let day = [holiday, timed("Breakfast", from: 7, to: 8)]
+    #expect(CalendarSource.events(day, startedAfter: nil) == day)
 }

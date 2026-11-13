@@ -28,6 +28,15 @@ public enum ParametersSchema {
         return nil
     }
 
+    /// The parameters `schema` marks `requestOnly`.
+    public static func requestOnly(in schema: JSON) -> Set<String> {
+        guard case .object(let object) = schema, case .object(let properties)? = object["properties"] else { return [] }
+        return Set(properties.compactMap { name, property in
+            if case .object(let property) = property, property["requestOnly"] == .bool(true) { return name }
+            return nil
+        })
+    }
+
     /// The parameters `schema` declares, one line each in name order, for
     /// the person writing a config: what kind of value it takes, the limits
     /// on it, whether it must be given or what it is when it is not, and the
@@ -48,6 +57,7 @@ public enum ParametersSchema {
             }
             if let minimum = property["minimum"] { facts.append("at least \(written(minimum))") }
             if let maximum = property["maximum"] { facts.append("at most \(written(maximum))") }
+            if property["requestOnly"] == .bool(true) { facts.append("set only by a request") }
             if required.contains(name) {
                 facts.append("required")
             } else if let value = property["default"] {

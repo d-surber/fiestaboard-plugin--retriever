@@ -70,6 +70,13 @@ enum Help {
               plugin may set in place of these; without it the body can set
               none:
                 config add local.retriever-source.calendar --name day --body days_from_today
+              A parameter that `status` shows as "set only by a request" cannot
+              be given with --set, only let through with --body. The
+              calendar's started_after is one, since the time now is wrong
+              the moment it is signed:
+                config add local.retriever-source.calendar --name upcoming --body started_after
+              with this line in the plugin's Request Body:
+                started_after: {{= DATEADD(NOW(), -1, "hours") }}
 
           RetrieverServer config remove <source name or module identifier>
               Stops allowing a source, or every source of a module.
