@@ -75,7 +75,7 @@ enum ModuleConfigCommand {
                     sourceName = name
                 case "--set":
                     guard let setting = rest.popFirst(), let equals = setting.firstIndex(of: "="), equals != setting.startIndex else {
-                        throw Problem("--set needs a parameter and its value, as in: --set calendars=Work")
+                        throw Problem("--set needs a parameter and its value, as in: --set name=value")
                     }
                     let name = String(setting[..<equals])
                     do {

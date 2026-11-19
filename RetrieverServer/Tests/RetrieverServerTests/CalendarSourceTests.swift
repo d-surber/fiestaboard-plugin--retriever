@@ -21,9 +21,11 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> 
 
 @Test func todaysAndTomorrowsEventsFitTheSchema() throws {
     let event = CalendarSource.Event(title: "Dentist", calendar: "Home", start: moment(2026, 10, 8, 9), end: moment(2026, 10, 8, 10), all_day: false, location: "")
-    let payload = CalendarSource.Payload(today: CalendarSource.Day(date: "2026-10-08", events: [event]),
+    let reminder = CalendarSource.Event(title: "Call", calendar: "Reminders", start: moment(2026, 10, 8, 11), end: moment(2026, 10, 8, 11),
+                                        all_day: false, location: "", kind: .reminder, priority: 1)
+    let payload = CalendarSource.Payload(today: CalendarSource.Day(date: "2026-10-08", events: [event, reminder]),
                                          tomorrow: CalendarSource.Day(date: "2026-10-09", events: []))
-    #expect(payload.today.count == 1)
+    #expect(payload.today.count == 2)
     #expect(payload.tomorrow.count == 0)
     #expect(matches(try #require(JSON(encoding: payload)), CalendarSource().schema))
 }
@@ -37,8 +39,8 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> 
 
 @Test func itSaysWhatItsParametersAreFor() {
     #expect(ParametersSchema.summary(of: CalendarSource().parametersSchema) == [
-        "calendars: text, \"\" if left out. Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
-        "started_after: text, set only by a request. Leave out today's events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay, and so do tomorrow's. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
+        "calendars: text, set only by a request. Only these calendars and reminder lists, by the names the Calendar and Reminders apps show, separated by commas. _Calendars_ is every calendar and _Reminders_ every reminder list. Left out, both.",
+        "started_after: text, set only by a request. Leave out today's events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay, and so do reminders and tomorrow's events. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
     ])
 }
 
@@ -68,27 +70,65 @@ func aListOfNamesIsWrittenWithCommas(list: String, names: [String]) {
 
 /// The calendars of a Mac with two accounts, each with a calendar called Home.
 private let calendarsHere = ["Home", "Work", "Birthdays", "Home", "Family"]
+/// Its reminder lists, one of them called as a calendar is.
+private let reminderListsHere = ["Reminders", "Shopping", "Family"]
 
-private func chosen(_ wanted: CalendarSource.Wanted) -> String {
-    switch CalendarSource.choose(wanted, from: Array(calendarsHere.indices), title: { calendarsHere[$0] }) {
+private func described(_ lists: CalendarSource.Lists<String>) -> String {
+    switch lists {
     case .every: return "every"
-    case .these(let indices): return "these \(indices)"
+    case .these(let names): return "\(names)"
+    }
+}
+
+private func chosen(_ names: String) -> String {
+    let wanted = CalendarSource.asked(by: names.isEmpty ? [:] : ["calendars": .string(names)]).wanted
+    switch CalendarSource.choose(wanted, calendars: calendarsHere, reminderLists: reminderListsHere, title: { $0 }) {
+    case .lists(let calendars, let reminderLists): return "calendars \(described(calendars)), lists \(described(reminderLists))"
     case .missing(let names): return "missing \(names)"
     }
 }
 
-@Test func onlyTheNamedCalendarsAreChosenInWhicheverAccountTheyAre() {
-    #expect(chosen(.every) == "every")
-    #expect(chosen(.only(["Work"])) == "these [1]")
-    #expect(chosen(.only(["home", "FAMILY"])) == "these [0, 3, 4]")
+@Test func leftOutItIsEveryCalendarAndEveryReminderList() {
+    #expect(chosen("") == "calendars every, lists every")
 }
 
-@Test func aNameThatIsNoCalendarsIsAMistake() {
-    #expect(chosen(.only(["Work", "Wrok", "Holidays"])) == "missing [\"Wrok\", \"Holidays\"]")
+@Test func onlyTheNamedCalendarsAreChosenInWhicheverAccountTheyAre() {
+    #expect(chosen("Work") == "calendars [\"Work\"], lists []")
+    #expect(chosen("home") == "calendars [\"Home\", \"Home\"], lists []")
+}
+
+@Test func aReminderListIsNamedAsACalendarIs() {
+    #expect(chosen("Shopping") == "calendars [], lists [\"Shopping\"]")
+    #expect(chosen("Work, Reminders") == "calendars [\"Work\"], lists [\"Reminders\"]")
+}
+
+@Test func aNameIsEveryCalendarAndListSoCalled() {
+    #expect(chosen("family") == "calendars [\"Family\"], lists [\"Family\"]")
+}
+
+@Test func twoNamesStandForEveryCalendarAndEveryList() {
+    #expect(chosen("_Calendars_") == "calendars every, lists []")
+    #expect(chosen("_Reminders_") == "calendars [], lists every")
+    #expect(chosen("_reminders_, Work") == "calendars [\"Work\"], lists every")
+    #expect(chosen("_Calendars_, Shopping") == "calendars every, lists [\"Shopping\"]")
+    #expect(chosen("_Calendars_,_Reminders_") == "calendars every, lists every")
+}
+
+@Test func aNameThatIsNoCalendarsOrListsIsAMistake() {
+    #expect(chosen("Work, Wrok, Holidays") == "missing [\"Wrok\", \"Holidays\"]")
+    #expect(chosen("_Calendars_, Groceries") == "missing [\"Groceries\"]")
+}
+
+@Test func whatIsChosenSaysWhetherAnyIsWanted() {
+    #expect(CalendarSource.Lists<String>.every.any)
+    #expect(CalendarSource.Lists<String>.every.items == nil)
+    #expect(CalendarSource.Lists.these(["Work"]).any)
+    #expect(!CalendarSource.Lists<String>.these([]).any)
 }
 
 @Test(arguments: [
     (["calendars": "Work, Family"] as SourceParameters, nil as String?),
+    (["calendars": "_Calendars_, _Reminders_"], nil),
     (["calendars": ""], nil),
     (["calendars": " , "], "the parameter \"calendars\" names no calendar"),
     (["calendars": 7], "the parameter \"calendars\" must be text, not 7"),
@@ -143,8 +183,8 @@ func whenTheEventsStartedIsAMomentWithItsOffsetFromUTC(text: String, taken: Bool
     #expect(CalendarSource().problem(with: ["started_after": .string(text)]) == (taken ? nil : problem))
 }
 
-@Test func onlyARequestMaySayWhenTheEventsStarted() {
-    #expect(ParametersSchema.requestOnly(in: CalendarSource().parametersSchema) == ["started_after"])
+@Test func onlyARequestMaySayWhichCalendarsOrWhenTheEventsStarted() {
+    #expect(ParametersSchema.requestOnly(in: CalendarSource().parametersSchema) == ["calendars", "started_after"])
 }
 
 /// A timed event on 13 November 2026 in Los Angeles, from its hours there.
@@ -161,7 +201,54 @@ private let holiday = CalendarSource.Event(title: "Holiday", calendar: "Home", s
     #expect(titles == ["Holiday", "Meeting", "Lunch"])
 }
 
+@Test func remindersStayWhenEarlierEventsAreLeftOut() throws {
+    let due = try #require(CalendarSource.event(reminder: "Call", list: "Reminders", due: DateComponents(year: 2026, month: 11, day: 13, hour: 8),
+                                                priority: 0, in: losAngeles))
+    let titles = CalendarSource.events([due, timed("Breakfast", from: 7, to: 8)], startedAfter: moment(2026, 11, 13, 9)).map(\.title)
+    #expect(titles == ["Call"])
+}
+
 @Test func withNoMomentNoEventIsLeftOut() {
     let day = [holiday, timed("Breakfast", from: 7, to: 8)]
     #expect(CalendarSource.events(day, startedAfter: nil) == day)
+}
+
+@Test func aReminderDueAtATimeIsAnEventThatStartsAndEndsThen() throws {
+    let event = try #require(CalendarSource.event(reminder: "Call", list: "Shopping", due: DateComponents(year: 2026, month: 11, day: 13, hour: 15, minute: 30),
+                                                  priority: 1, in: losAngeles))
+    #expect(event == CalendarSource.Event(title: "Call", calendar: "Shopping", start: moment(2026, 11, 13, 15).addingTimeInterval(30 * 60),
+                                          end: moment(2026, 11, 13, 15).addingTimeInterval(30 * 60), all_day: false, location: "",
+                                          kind: .reminder, priority: 1))
+}
+
+@Test func aReminderDueOnADateIsAllDay() throws {
+    let event = try #require(CalendarSource.event(reminder: nil, list: "Reminders", due: DateComponents(year: 2026, month: 11, day: 13),
+                                                  priority: 0, in: losAngeles))
+    #expect(event.title == "")
+    #expect(event.all_day)
+    #expect(event.start == moment(2026, 11, 13, 0))
+    #expect(event.kind == .reminder)
+}
+
+@Test func aReminderWithNoDueDateIsNoEvent() {
+    #expect(CalendarSource.event(reminder: "Someday", list: "Reminders", due: nil, priority: 0, in: losAngeles) == nil)
+}
+
+/// A reminder due at an hour on a day of November 2026 in Los Angeles.
+private func reminder(_ title: String, day: Int, hour: Int) -> CalendarSource.Event {
+    CalendarSource.event(reminder: title, list: "Reminders", due: DateComponents(year: 2026, month: 11, day: day, hour: hour), priority: 0, in: losAngeles)!
+}
+
+@Test func todayHasTheRemindersDueTodayAndThoseOverdue() throws {
+    let today = try #require(CalendarSource.day(0, from: moment(2026, 11, 13), in: losAngeles))
+    let tomorrow = try #require(CalendarSource.day(1, from: moment(2026, 11, 13), in: losAngeles))
+    let all = [reminder("Last week", day: 6, hour: 9), reminder("This morning", day: 13, hour: 8), reminder("Tonight", day: 13, hour: 23),
+               reminder("Tomorrow", day: 14, hour: 0), reminder("Later", day: 15, hour: 9)]
+    #expect(CalendarSource.reminders(all, dueIn: today, overdueToo: true).map(\.title) == ["Last week", "This morning", "Tonight"])
+    #expect(CalendarSource.reminders(all, dueIn: tomorrow, overdueToo: false).map(\.title) == ["Tomorrow"])
+}
+
+@Test func eventsAndRemindersAreInOrderOfTimeThenTitle() {
+    let all = [timed("Lunch", from: 12, to: 13), reminder("Call", day: 13, hour: 12), reminder("Bills", day: 6, hour: 9), holiday]
+    #expect(CalendarSource.inOrder(all).map(\.title) == ["Bills", "Holiday", "Call", "Lunch"])
 }

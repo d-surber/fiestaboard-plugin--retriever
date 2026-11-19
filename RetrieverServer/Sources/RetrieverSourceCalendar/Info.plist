@@ -7,8 +7,12 @@
     <key>CFBundleName</key>
     <string>RetrieverSourceCalendar</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Serves a day's calendar events to FiestaBoard.</string>
+    <string>Serves today's and tomorrow's calendar events to FiestaBoard.</string>
     <key>NSCalendarsUsageDescription</key>
-    <string>Serves a day's calendar events to FiestaBoard.</string>
+    <string>Serves today's and tomorrow's calendar events to FiestaBoard.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Serves the reminders due today and tomorrow to FiestaBoard.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Serves the reminders due today and tomorrow to FiestaBoard.</string>
 </dict>
 </plist>

@@ -2,23 +2,49 @@ import EventKit
 import Foundation
 import RetrieverSourceKit
 
-/// Today's events and tomorrow's, from the Calendar app.
+/// Today's events and tomorrow's, from the Calendar app, with the reminders
+/// due on each day, from the Reminders app.
 ///
-/// Which calendars is a parameter. A calendar is named as the Calendar app
-/// shows it, and the name stands for every calendar so called, whichever
-/// account it is in.
+/// Which calendars and reminder lists is a parameter. Each is named as its
+/// app shows it, and the name stands for every calendar and list so called,
+/// whichever account it is in. Two names are kept for the whole of each:
+/// `_Calendars_` and `_Reminders_`.
+///
+/// A reminder is an incomplete one, due that day; today's include those
+/// overdue. It is given as an event that starts and ends when it is due,
+/// all day if it is due on a date with no time.
 ///
 /// A request may also leave out today's events that started some while ago,
 /// so that a board shows what is on now and next and not what is over.
 final class CalendarSource: Source {
-    /// One event. Times are moments, not text laid out for a display.
+    /// What an event is: an event in a calendar, or a reminder in a list.
+    enum Kind: String, Codable {
+        case event, reminder
+    }
+
+    /// One event or reminder. Times are moments, not text laid out for a display.
     struct Event: Codable, Equatable {
         let title: String
+        /// The calendar's name, or the reminder list's.
         let calendar: String
         let start: Date
         let end: Date
         let all_day: Bool
         let location: String
+        let kind: Kind
+        /// A reminder's priority as Reminders keeps it: 0 none, 1 high to 9 low. 0 for an event.
+        let priority: Int
+
+        init(title: String, calendar: String, start: Date, end: Date, all_day: Bool, location: String, kind: Kind = .event, priority: Int = 0) {
+            self.title = title
+            self.calendar = calendar
+            self.start = start
+            self.end = end
+            self.all_day = all_day
+            self.location = location
+            self.kind = kind
+            self.priority = priority
+        }
     }
 
     /// One day's events.
@@ -59,6 +85,8 @@ final class CalendarSource: Source {
                         "end": ["type": "string", "format": "date-time"],
                         "all_day": ["type": "boolean"],
                         "location": ["type": "string"],
+                        "kind": ["type": "string", "enum": ["event", "reminder"]],
+                        "priority": ["type": "integer"],
                     ],
                 ],
             ],
@@ -80,26 +108,46 @@ final class CalendarSource: Source {
         "type": "object",
         "properties": [
             "calendars": [
-                "type": "string", "default": "",
-                "description": "Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
+                "type": "string", "requestOnly": true,
+                "description": "Only these calendars and reminder lists, by the names the Calendar and Reminders apps show, separated by commas. _Calendars_ is every calendar and _Reminders_ every reminder list. Left out, both.",
             ],
             "started_after": [
                 "type": "string", "format": "date-time", "requestOnly": true,
-                "description": "Leave out today's events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay, and so do tomorrow's. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
+                "description": "Leave out today's events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay, and so do reminders and tomorrow's events. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
             ],
         ],
     ]
 
-    /// Which calendars are wanted, each by name.
+    /// Which calendars and reminder lists are wanted, each by name.
     enum Wanted: Equatable {
         case every
         case only([String])
     }
 
-    /// The calendars a choice comes to, or the names it gives that no calendar has.
-    enum Chosen<Item> {
+    /// The name that stands for every calendar.
+    static let everyCalendar = "_Calendars_"
+    /// The name that stands for every reminder list.
+    static let everyReminderList = "_Reminders_"
+
+    /// Some of one kind of list, calendars or reminder lists.
+    enum Lists<Item> {
         case every
         case these([Item])
+
+        /// The lists, or nil for every one, as EventKit takes them.
+        var items: [Item]? {
+            if case .these(let items) = self { return items }
+            return nil
+        }
+
+        /// Whether any list at all is wanted.
+        var any: Bool { items.map { !$0.isEmpty } ?? true }
+    }
+
+    /// The calendars and reminder lists a choice comes to, or the names it
+    /// gives that no calendar or list has.
+    enum Chosen<Item> {
+        case lists(calendars: Lists<Item>, reminderLists: Lists<Item>)
         case missing([String])
     }
 
@@ -128,10 +176,28 @@ final class CalendarSource: Source {
     /// The events left once those that started before `startedAfter` are
     /// left out. One that started at that moment stays, and so does every
     /// all-day event, which starts at midnight but is not over until the
-    /// day is.
+    /// day is, and every reminder, which is still to be done.
     static func events(_ events: [Event], startedAfter: Date?) -> [Event] {
         guard let startedAfter else { return events }
-        return events.filter { $0.all_day || $0.start >= startedAfter }
+        return events.filter { $0.all_day || $0.kind == .reminder || $0.start >= startedAfter }
+    }
+
+    /// A reminder as an event, if it is due at all: it starts and ends when
+    /// it is due, and is all day if it is due on a date with no time.
+    static func event(reminder title: String?, list: String, due: DateComponents?, priority: Int, in calendar: Calendar) -> Event? {
+        guard let due, let moment = calendar.date(from: due) else { return nil }
+        return Event(title: title ?? "", calendar: list, start: moment, end: moment, all_day: due.hour == nil,
+                     location: "", kind: .reminder, priority: priority)
+    }
+
+    /// The reminders due in `day`, with those due before it if `overdueToo`.
+    static func reminders(_ reminders: [Event], dueIn day: DateInterval, overdueToo: Bool) -> [Event] {
+        reminders.filter { $0.start < day.end && (overdueToo || $0.start >= day.start) }
+    }
+
+    /// Earliest first, and by title when two are at one time.
+    static func inOrder(_ events: [Event]) -> [Event] {
+        events.sorted { ($0.start, $0.title) < ($1.start, $1.title) }
     }
 
     /// The names in a list written with commas between them: without the
@@ -149,14 +215,21 @@ final class CalendarSource: Source {
         one.caseInsensitiveCompare(other) == .orderedSame
     }
 
-    /// Which of `all` are wanted, going by the title of each. A name that is
-    /// no calendar's is a mistake, so that a calendar renamed or misspelt
+    /// Which calendars and reminder lists are wanted, going by the title of
+    /// each. A name is looked for among both. A name that is neither a
+    /// calendar's nor a list's is a mistake, so that one renamed or misspelt
     /// does not go unnoticed.
-    static func choose<Item>(_ wanted: Wanted, from all: [Item], title: (Item) -> String) -> Chosen<Item> {
-        guard case .only(let named) = wanted else { return .every }
-        let missing = named.filter { name in !all.contains { same(title($0), name) } }
+    static func choose<Item>(_ wanted: Wanted, calendars: [Item], reminderLists: [Item], title: (Item) -> String) -> Chosen<Item> {
+        guard case .only(let named) = wanted else { return .lists(calendars: .every, reminderLists: .every) }
+        let everyCalendar = named.contains { same($0, Self.everyCalendar) }
+        let everyReminderList = named.contains { same($0, Self.everyReminderList) }
+        let plain = named.filter { !same($0, Self.everyCalendar) && !same($0, Self.everyReminderList) }
+        let missing = plain.filter { name in !(calendars + reminderLists).contains { same(title($0), name) } }
         guard missing.isEmpty else { return .missing(missing) }
-        return .these(all.filter { item in named.contains { same(title(item), $0) } })
+        func lists(_ all: [Item], every: Bool) -> Lists<Item> {
+            every ? .every : .these(all.filter { item in plain.contains { same(title(item), $0) } })
+        }
+        return .lists(calendars: lists(calendars, every: everyCalendar), reminderLists: lists(reminderLists, every: everyReminderList))
     }
 
     func problem(with parameters: SourceParameters) -> String? {
@@ -188,49 +261,74 @@ final class CalendarSource: Source {
     private let store = EKEventStore()
 
     func fetch(parameters: SourceParameters, _ done: @escaping (Entry) -> Void) {
-        // Asks the user the first time; answers at once after that.
-        store.requestFullAccessToEvents { granted, error in
-            guard granted else {
-                log("Calendar access denied: \(error?.localizedDescription ?? "no error given")")
-                return done(self.failed("Calendar access denied"))
+        // Each asks the user the first time, and answers at once after that.
+        store.requestFullAccessToEvents { calendarsAllowed, error in
+            if !calendarsAllowed { log("Calendar access denied: \(error?.localizedDescription ?? "no error given")") }
+            self.store.requestFullAccessToReminders { remindersAllowed, error in
+                if !remindersAllowed { log("Reminders access denied: \(error?.localizedDescription ?? "no error given")") }
+                self.read(Self.asked(by: parameters), calendarsAllowed: calendarsAllowed, remindersAllowed: remindersAllowed, done)
             }
-            done(self.read(Self.asked(by: parameters)))
         }
     }
 
-    /// Reads today's and tomorrow's events, access having been granted.
-    private func read(_ asked: Asked) -> Entry {
+    /// Reads today's and tomorrow's events and reminders, from what access allows.
+    private func read(_ asked: Asked, calendarsAllowed: Bool, remindersAllowed: Bool, _ done: @escaping (Entry) -> Void) {
         let calendar = Calendar.current
         let now = Date()
         guard let today = Self.day(0, from: now, in: calendar), let tomorrow = Self.day(1, from: now, in: calendar) else {
-            return failed("today or tomorrow cannot be reckoned")
+            return done(failed("today or tomorrow cannot be reckoned"))
         }
         store.refreshSourcesIfNecessary()
 
-        // Whether a calendar of a name exists can change while the server
-        // runs, so it is found out here and not when the server starts.
-        var calendars: [EKCalendar]?   // nil is every calendar
-        switch Self.choose(asked.wanted, from: store.calendars(for: .event), title: \.title) {
-        case .every: break
-        case .these(let chosen): calendars = chosen
+        // Whether a calendar or list of a name exists can change while the
+        // server runs, so it is found out here and not when the server starts.
+        let denied = [calendarsAllowed ? nil : "Calendar access denied", remindersAllowed ? nil : "Reminders access denied"].compactMap { $0 }
+        let calendars: Lists<EKCalendar>, reminderLists: Lists<EKCalendar>
+        switch Self.choose(asked.wanted, calendars: calendarsAllowed ? store.calendars(for: .event) : [],
+                           reminderLists: remindersAllowed ? store.calendars(for: .reminder) : [], title: \.title) {
+        case .lists(let chosenCalendars, let chosenLists):
+            (calendars, reminderLists) = (chosenCalendars, chosenLists)
         case .missing(let names):
-            return failed((names.count == 1 ? "no calendar named " : "no calendars named ") + names.map { "\"\($0)\"" }.joined(separator: ", "))
+            let reason = (names.count == 1 ? "no calendar or list named " : "no calendars or lists named ") + names.map { "\"\($0)\"" }.joined(separator: ", ")
+            return done(failed(([reason] + denied).joined(separator: "; ")))
         }
-        let todaysEvents = Self.events(events(on: today, in: calendars), startedAfter: asked.startedAfter)
-        let payload = Payload(today: Day(date: Self.dateText(of: today.start, in: calendar), events: todaysEvents),
-                              tomorrow: Day(date: Self.dateText(of: tomorrow.start, in: calendar), events: events(on: tomorrow, in: calendars)))
-        log(.debug, "Fetched \(payload.today.count) events for today and \(payload.tomorrow.count) for tomorrow")
-        return succeeded(payload)
+        if calendars.any && !calendarsAllowed { return done(failed("Calendar access denied")) }
+        if reminderLists.any && !remindersAllowed { return done(failed("Reminders access denied")) }
+
+        let todaysEvents = events(on: today, in: calendars), tomorrowsEvents = events(on: tomorrow, in: calendars)
+        let answer = { (reminders: [Event]) in
+            let payload = Payload(
+                today: Day(date: Self.dateText(of: today.start, in: calendar),
+                           events: Self.inOrder(Self.events(todaysEvents, startedAfter: asked.startedAfter)
+                                                + Self.reminders(reminders, dueIn: today, overdueToo: true))),
+                tomorrow: Day(date: Self.dateText(of: tomorrow.start, in: calendar),
+                              events: Self.inOrder(tomorrowsEvents + Self.reminders(reminders, dueIn: tomorrow, overdueToo: false))))
+            log(.debug, "Fetched \(payload.today.count) for today and \(payload.tomorrow.count) for tomorrow")
+            done(self.succeeded(payload))
+        }
+        guard reminderLists.any else { return answer([]) }
+
+        // Every incomplete reminder, filtered here: EventKit's date-range
+        // predicate can miss reminders due on a date with no time. A
+        // repeating reminder is one EKReminder, due at its next occurrence.
+        let incomplete = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: reminderLists.items)
+        store.fetchReminders(matching: incomplete) { found in
+            guard let found else {
+                log("Reminders could not be read")
+                return done(self.failed("Reminders could not be read"))
+            }
+            answer(found.compactMap {
+                Self.event(reminder: $0.title, list: $0.calendar.title, due: $0.dueDateComponents, priority: $0.priority, in: calendar)
+            })
+        }
     }
 
-    /// The events of these calendars (nil for every calendar) that fall in
-    /// `day`, earliest first.
-    private func events(on day: DateInterval, in calendars: [EKCalendar]?) -> [Event] {
+    /// The events of these calendars that fall in `day`.
+    private func events(on day: DateInterval, in calendars: Lists<EKCalendar>) -> [Event] {
         // Asked for the events of no calendars, EventKit gives those of all of them.
-        if let calendars, calendars.isEmpty { return [] }
-        let onThatDay = store.predicateForEvents(withStart: day.start, end: day.end, calendars: calendars)
+        guard calendars.any else { return [] }
+        let onThatDay = store.predicateForEvents(withStart: day.start, end: day.end, calendars: calendars.items)
         return store.events(matching: onThatDay)
             .map { Event(title: $0.title ?? "", calendar: $0.calendar.title, start: $0.startDate, end: $0.endDate, all_day: $0.isAllDay, location: $0.location ?? "") }
-            .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
     }
 }
