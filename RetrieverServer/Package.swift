@@ -43,12 +43,11 @@ let package = Package(
             linkerSettings: [embedding(serverSections)]
         ),
         module("RetrieverSourceOS"),
-        module("RetrieverSourceReminders", infoPlist: true),
         module("RetrieverSourceMusic", infoPlist: true),
         module("RetrieverSourceCalendar", infoPlist: true),
         .testTarget(
             name: "RetrieverServerTests",
             dependencies: ["RetrieverServer", "RetrieverSourceKit", "RetrieverSourceOS",
-                           "RetrieverSourceReminders", "RetrieverSourceMusic", "RetrieverSourceCalendar"]),
+                           "RetrieverSourceMusic", "RetrieverSourceCalendar"]),
     ]
 )
