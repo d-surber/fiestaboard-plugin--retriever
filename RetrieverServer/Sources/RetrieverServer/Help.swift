@@ -56,8 +56,8 @@ enum Help {
               Allows a source under a name of your choosing, and says what its
               module is to be asked. A module that takes parameters can be
               listed as often as you like, each time under another name:
-                config add local.retriever-source.calendar --name today
-                config add local.retriever-source.calendar --name tomorrow --set days_from_today=1
+                config add local.retriever-source.calendar --name family --set calendars=Family
+                config add local.retriever-source.calendar --name work --set calendars=Work
               A name is lower-case letters, digits and underscores. A value
               that reads as a number or as true or false is one; put it in
               quotes to make it text. A value is a single one, never an
@@ -69,12 +69,12 @@ enum Help {
               --body names the parameters the body of a request from the
               plugin may set in place of these; without it the body can set
               none:
-                config add local.retriever-source.calendar --name day --body days_from_today
+                config add local.retriever-source.calendar --body calendars
               A parameter that `status` shows as "set only by a request" cannot
               be given with --set, only let through with --body. The
               calendar's started_after is one, since the time now is wrong
               the moment it is signed:
-                config add local.retriever-source.calendar --name upcoming --body started_after
+                config add local.retriever-source.calendar --body calendars,started_after
               with this line in the plugin's Request Body:
                 started_after: {{= DATEADD(NOW(), -1, "hours") }}
 

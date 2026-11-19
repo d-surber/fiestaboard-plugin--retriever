@@ -2,16 +2,13 @@ import EventKit
 import Foundation
 import RetrieverSourceKit
 
-/// The events of one day, from the Calendar app.
+/// Today's events and tomorrow's, from the Calendar app.
 ///
-/// Which day, and which calendars, are parameters, so that the module can be
-/// listed in the module config more than once: as today's events and as
-/// tomorrow's, or as some calendars' and as others'.
+/// Which calendars is a parameter. A calendar is named as the Calendar app
+/// shows it, and the name stands for every calendar so called, whichever
+/// account it is in.
 ///
-/// A calendar is named as the Calendar app shows it, and the name stands for
-/// every calendar so called, whichever account it is in.
-///
-/// A request may also leave out the events that started some while ago,
+/// A request may also leave out today's events that started some while ago,
 /// so that a board shows what is on now and next and not what is over.
 final class CalendarSource: Source {
     /// One event. Times are moments, not text laid out for a display.
@@ -24,8 +21,9 @@ final class CalendarSource: Source {
         let location: String
     }
 
-    struct Payload: Codable, Equatable {
-        /// The day asked for, as its date in this Mac's time zone: "2026-10-08".
+    /// One day's events.
+    struct Day: Codable, Equatable {
+        /// The day, as its date in this Mac's time zone: "2026-10-08".
         let date: String
         let count: Int
         let events: [Event]
@@ -37,10 +35,15 @@ final class CalendarSource: Source {
         }
     }
 
+    struct Payload: Codable, Equatable {
+        let today: Day
+        let tomorrow: Day
+    }
+
     let name = "calendar"
 
-    /// The shape of `Payload`.
-    let schema: JSON = [
+    /// The shape of `Day`.
+    static let daySchema: JSON = [
         "type": "object",
         "properties": [
             "date": ["type": "string", "format": "date"],
@@ -63,8 +66,15 @@ final class CalendarSource: Source {
         "default": ["date": "", "count": 0, "events": []],
     ]
 
-    /// How far from today a day may be asked for, either way: ten years.
-    static let furthestDayFromToday = 3660
+    /// The shape of `Payload`.
+    let schema: JSON = [
+        "type": "object",
+        "properties": ["today": daySchema, "tomorrow": daySchema],
+        "default": [
+            "today": ["date": "", "count": 0, "events": []],
+            "tomorrow": ["date": "", "count": 0, "events": []],
+        ],
+    ]
 
     let parametersSchema: JSON = [
         "type": "object",
@@ -73,17 +83,9 @@ final class CalendarSource: Source {
                 "type": "string", "default": "",
                 "description": "Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
             ],
-            "days_from_today": [
-                "type": "integer", "default": 0, "minimum": .int(-furthestDayFromToday), "maximum": .int(furthestDayFromToday),
-                "description": "0 is today, 1 tomorrow, -1 yesterday.",
-            ],
-            "except": [
-                "type": "string", "default": "",
-                "description": "Every calendar but these, named the same way. Not together with calendars.",
-            ],
             "started_after": [
                 "type": "string", "format": "date-time", "requestOnly": true,
-                "description": "Leave out events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
+                "description": "Leave out today's events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay, and so do tomorrow's. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
             ],
         ],
     ]
@@ -92,7 +94,6 @@ final class CalendarSource: Source {
     enum Wanted: Equatable {
         case every
         case only([String])
-        case allBut([String])
     }
 
     /// The calendars a choice comes to, or the names it gives that no calendar has.
@@ -105,21 +106,16 @@ final class CalendarSource: Source {
     /// What one fetch is asked for.
     struct Asked: Equatable {
         let wanted: Wanted
-        let daysFromToday: Int
-        /// The moment before which a timed event that started is left out; nil to leave none out.
+        /// The moment before which a timed event today that started is left out; nil to leave none out.
         let startedAfter: Date?
     }
 
     /// What a set of parameters asks for, with the defaults for what it leaves out.
     static func asked(by parameters: SourceParameters) -> Asked {
-        var only: [String] = [], allBut: [String] = [], daysFromToday = 0, startedAfter: Date?
+        var only: [String] = [], startedAfter: Date?
         if case .string(let list)? = parameters["calendars"] { only = names(in: list) }
-        if case .string(let list)? = parameters["except"] { allBut = names(in: list) }
-        if case .int(let days)? = parameters["days_from_today"] { daysFromToday = days }
         if case .string(let text)? = parameters["started_after"] { startedAfter = moment(from: text) }
-        // Both lists at once does not pass `problem(with:)`.
-        return Asked(wanted: !only.isEmpty ? .only(only) : !allBut.isEmpty ? .allBut(allBut) : .every,
-                     daysFromToday: daysFromToday, startedAfter: startedAfter)
+        return Asked(wanted: only.isEmpty ? .every : .only(only), startedAfter: startedAfter)
     }
 
     /// A moment written as in RFC 3339, "2026-11-13T09:15:00-08:00" or
@@ -154,30 +150,20 @@ final class CalendarSource: Source {
     }
 
     /// Which of `all` are wanted, going by the title of each. A name that is
-    /// no calendar's is a mistake whether it was to be read or left out, so
-    /// that a calendar renamed or misspelt does not go unnoticed.
+    /// no calendar's is a mistake, so that a calendar renamed or misspelt
+    /// does not go unnoticed.
     static func choose<Item>(_ wanted: Wanted, from all: [Item], title: (Item) -> String) -> Chosen<Item> {
-        let named: [String]
-        switch wanted {
-        case .every: return .every
-        case .only(let names), .allBut(let names): named = names
-        }
+        guard case .only(let named) = wanted else { return .every }
         let missing = named.filter { name in !all.contains { same(title($0), name) } }
         guard missing.isEmpty else { return .missing(missing) }
-        var only = false
-        if case .only = wanted { only = true }
-        return .these(all.filter { item in named.contains { same(title(item), $0) } == only })
+        return .these(all.filter { item in named.contains { same(title(item), $0) } })
     }
 
     func problem(with parameters: SourceParameters) -> String? {
         if let problem = ParametersSchema.problem(with: parameters, against: parametersSchema) { return problem }
-        var listed: [String] = []
-        for parameter in ["calendars", "except"] {
-            guard case .string(let list)? = parameters[parameter], !list.isEmpty else { continue }
-            if Self.names(in: list).isEmpty { return "the parameter \"\(parameter)\" names no calendar" }
-            listed.append(parameter)
+        if case .string(let list)? = parameters["calendars"], !list.isEmpty, Self.names(in: list).isEmpty {
+            return "the parameter \"calendars\" names no calendar"
         }
-        if listed.count > 1 { return "give \"calendars\" or \"except\", not both" }
         if case .string(let text)? = parameters["started_after"], Self.moment(from: text) == nil {
             return "the parameter \"started_after\" must be a moment with its offset from UTC, as 2026-11-13T09:15:00-08:00, not \"\(text)\""
         }
@@ -212,10 +198,13 @@ final class CalendarSource: Source {
         }
     }
 
-    /// Reads one day's events, access having been granted.
+    /// Reads today's and tomorrow's events, access having been granted.
     private func read(_ asked: Asked) -> Entry {
         let calendar = Calendar.current
-        guard let day = Self.day(asked.daysFromToday, from: Date(), in: calendar) else { return failed("that day cannot be reckoned") }
+        let now = Date()
+        guard let today = Self.day(0, from: now, in: calendar), let tomorrow = Self.day(1, from: now, in: calendar) else {
+            return failed("today or tomorrow cannot be reckoned")
+        }
         store.refreshSourcesIfNecessary()
 
         // Whether a calendar of a name exists can change while the server
@@ -227,17 +216,21 @@ final class CalendarSource: Source {
         case .missing(let names):
             return failed((names.count == 1 ? "no calendar named " : "no calendars named ") + names.map { "\"\($0)\"" }.joined(separator: ", "))
         }
-        // Asked for the events of no calendars, EventKit gives those of all of them.
-        if let calendars, calendars.isEmpty {
-            return succeeded(Payload(date: Self.dateText(of: day.start, in: calendar), events: []))
-        }
+        let todaysEvents = Self.events(events(on: today, in: calendars), startedAfter: asked.startedAfter)
+        let payload = Payload(today: Day(date: Self.dateText(of: today.start, in: calendar), events: todaysEvents),
+                              tomorrow: Day(date: Self.dateText(of: tomorrow.start, in: calendar), events: events(on: tomorrow, in: calendars)))
+        log(.debug, "Fetched \(payload.today.count) events for today and \(payload.tomorrow.count) for tomorrow")
+        return succeeded(payload)
+    }
 
+    /// The events of these calendars (nil for every calendar) that fall in
+    /// `day`, earliest first.
+    private func events(on day: DateInterval, in calendars: [EKCalendar]?) -> [Event] {
+        // Asked for the events of no calendars, EventKit gives those of all of them.
+        if let calendars, calendars.isEmpty { return [] }
         let onThatDay = store.predicateForEvents(withStart: day.start, end: day.end, calendars: calendars)
-        let allThatDay = store.events(matching: onThatDay)
+        return store.events(matching: onThatDay)
             .map { Event(title: $0.title ?? "", calendar: $0.calendar.title, start: $0.startDate, end: $0.endDate, all_day: $0.isAllDay, location: $0.location ?? "") }
-        let events = Self.events(allThatDay, startedAfter: asked.startedAfter)
             .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
-        log(.debug, "Fetched \(events.count) events for \(Self.dateText(of: day.start, in: calendar))")
-        return succeeded(Payload(date: Self.dateText(of: day.start, in: calendar), events: events))
     }
 }

@@ -19,38 +19,38 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) -> 
     #expect(fitsTheSourceContract(CalendarSource()))
 }
 
-@Test func aDaysEventsFitTheSchema() throws {
+@Test func todaysAndTomorrowsEventsFitTheSchema() throws {
     let event = CalendarSource.Event(title: "Dentist", calendar: "Home", start: moment(2026, 10, 8, 9), end: moment(2026, 10, 8, 10), all_day: false, location: "")
-    let payload = CalendarSource.Payload(date: "2026-10-08", events: [event])
-    #expect(payload.count == 1)
+    let payload = CalendarSource.Payload(today: CalendarSource.Day(date: "2026-10-08", events: [event]),
+                                         tomorrow: CalendarSource.Day(date: "2026-10-09", events: []))
+    #expect(payload.today.count == 1)
+    #expect(payload.tomorrow.count == 0)
     #expect(matches(try #require(JSON(encoding: payload)), CalendarSource().schema))
+}
+
+@Test func whenItCannotBeReadItGivesTwoEmptyDays() {
+    #expect(CalendarSource().failed("Calendar access denied").data == [
+        "today": ["date": "", "count": 0, "events": []],
+        "tomorrow": ["date": "", "count": 0, "events": []],
+    ])
 }
 
 @Test func itSaysWhatItsParametersAreFor() {
     #expect(ParametersSchema.summary(of: CalendarSource().parametersSchema) == [
         "calendars: text, \"\" if left out. Only these calendars, by the names the Calendar app shows, separated by commas; empty for every calendar.",
-        "days_from_today: a whole number, at least -3660, at most 3660, 0 if left out. 0 is today, 1 tomorrow, -1 yesterday.",
-        "except: text, \"\" if left out. Every calendar but these, named the same way. Not together with calendars.",
-        "started_after: text, set only by a request. Leave out events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
+        "started_after: text, set only by a request. Leave out today's events that started before this moment, written with its offset from UTC, as 2026-11-13T09:15:00-08:00; all-day events stay, and so do tomorrow's. In the plugin's request body, an hour ago is {{= DATEADD(NOW(), -1, \"hours\") }}.",
     ])
 }
 
-@Test func withNoParametersItIsEveryCalendarToday() {
+@Test func withNoParametersItIsEveryCalendar() {
     let asked = CalendarSource.asked(by: [:])
     #expect(asked.wanted == .every)
-    #expect(asked.daysFromToday == 0)
     #expect(asked.startedAfter == nil)
+    #expect(CalendarSource.asked(by: ["calendars": ""]).wanted == .every)
 }
 
-@Test func itIsAskedForCalendarsByNameAndADayByItsDistanceFromToday() {
-    let asked = CalendarSource.asked(by: ["calendars": "Work, Family", "days_from_today": -1])
-    #expect(asked.wanted == .only(["Work", "Family"]))
-    #expect(asked.daysFromToday == -1)
-}
-
-@Test func itIsAskedForEveryCalendarButSome() {
-    #expect(CalendarSource.asked(by: ["except": "Birthdays,US Holidays"]).wanted == .allBut(["Birthdays", "US Holidays"]))
-    #expect(CalendarSource.asked(by: ["calendars": "", "except": ""]).wanted == .every)
+@Test func itIsAskedForCalendarsByName() {
+    #expect(CalendarSource.asked(by: ["calendars": "Work, Family"]).wanted == .only(["Work", "Family"]))
 }
 
 @Test(arguments: [
@@ -83,36 +83,24 @@ private func chosen(_ wanted: CalendarSource.Wanted) -> String {
     #expect(chosen(.only(["home", "FAMILY"])) == "these [0, 3, 4]")
 }
 
-@Test func everyCalendarButTheNamedOnesIsChosen() {
-    #expect(chosen(.allBut(["Birthdays"])) == "these [0, 1, 3, 4]")
-    #expect(chosen(.allBut(["home"])) == "these [1, 2, 4]")
-    #expect(chosen(.allBut(["Home", "Work", "Birthdays", "Family"])) == "these []")
-}
-
-@Test func aNameThatIsNoCalendarsIsAMistakeWhicheverListItIsIn() {
+@Test func aNameThatIsNoCalendarsIsAMistake() {
     #expect(chosen(.only(["Work", "Wrok", "Holidays"])) == "missing [\"Wrok\", \"Holidays\"]")
-    #expect(chosen(.allBut(["Birthdays", "Holidays"])) == "missing [\"Holidays\"]")
 }
 
 @Test(arguments: [
-    (["calendars": "Work, Family", "days_from_today": 1] as SourceParameters, nil as String?),
-    (["except": "Birthdays"], nil),
-    (["calendars": "", "except": "Birthdays"], nil),
-    (["calendars": "Work", "except": "Birthdays"], "give \"calendars\" or \"except\", not both"),
+    (["calendars": "Work, Family"] as SourceParameters, nil as String?),
+    (["calendars": ""], nil),
     (["calendars": " , "], "the parameter \"calendars\" names no calendar"),
-    (["except": ","], "the parameter \"except\" names no calendar"),
-    (["days_from_today": "tomorrow"], "the parameter \"days_from_today\" must be a whole number, not \"tomorrow\""),
-    (["days_from_today": .double(0.5)], "the parameter \"days_from_today\" must be a whole number, not 0.5"),
-    (["days_from_today": 4000], "the parameter \"days_from_today\" must be at most 3660, not 4000"),
     (["calendars": 7], "the parameter \"calendars\" must be text, not 7"),
-    (["calendar": "Work"], "takes no parameter named \"calendar\" (it takes: calendars, days_from_today, except, started_after)"),
-    (["date": "2026-10-08"], "takes no parameter named \"date\" (it takes: calendars, days_from_today, except, started_after)"),
+    (["calendar": "Work"], "takes no parameter named \"calendar\" (it takes: calendars, started_after)"),
+    (["except": "Birthdays"], "takes no parameter named \"except\" (it takes: calendars, started_after)"),
+    (["days_from_today": 1], "takes no parameter named \"days_from_today\" (it takes: calendars, started_after)"),
 ])
 func itsParametersAreChecked(parameters: SourceParameters, problem: String?) {
     #expect(CalendarSource().problem(with: parameters) == problem)
 }
 
-@Test(arguments: [(0, "2026-10-08"), (1, "2026-10-09"), (-1, "2026-10-07"), (24, "2026-11-01"), (-8, "2026-09-30"), (365, "2027-10-08")])
+@Test(arguments: [(0, "2026-10-08"), (1, "2026-10-09"), (24, "2026-11-01"), (365, "2027-10-08")])
 func aDayIsCountedFromToday(daysFromToday: Int, date: String) throws {
     let day = try #require(CalendarSource.day(daysFromToday, from: moment(2026, 10, 8, 15), in: losAngeles))
     #expect(CalendarSource.dateText(of: day.start, in: losAngeles) == date)

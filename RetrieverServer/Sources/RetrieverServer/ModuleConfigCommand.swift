@@ -75,7 +75,7 @@ enum ModuleConfigCommand {
                     sourceName = name
                 case "--set":
                     guard let setting = rest.popFirst(), let equals = setting.firstIndex(of: "="), equals != setting.startIndex else {
-                        throw Problem("--set needs a parameter and its value, as in: --set days_from_today=1")
+                        throw Problem("--set needs a parameter and its value, as in: --set calendars=Work")
                     }
                     let name = String(setting[..<equals])
                     do {
@@ -85,7 +85,7 @@ enum ModuleConfigCommand {
                     }
                 case "--body":
                     guard let list = rest.popFirst() else {
-                        throw Problem("--body needs the parameters a request's body may set, as in: --body days_from_today,calendars")
+                        throw Problem("--body needs the parameters a request's body may set, as in: --body calendars,started_after")
                     }
                     requestable += list.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 default:
